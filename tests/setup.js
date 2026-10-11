@@ -12,6 +12,7 @@ beforeAll(async () => {
 
   mongoServer = await MongoMemoryServer.create();
   const uri = mongoServer.getUri();
+  process.env.TEST_MONGO_URI = uri;
 
   if (mongoose.connection.readyState !== 0) {
     await mongoose.disconnect();

@@ -7,6 +7,7 @@ import { corsMiddleware } from './config/cors.js';
 import { globalLimiter } from './middleware/rateLimiter.js';
 import { errorHandler } from './middleware/errorHandler.js';
 import { AppError } from './utils/AppError.js';
+import { ensureDbConnected } from './middleware/dbMiddleware.js';
 import v1Routes from './routes/index.js';
 
 const app = express();
@@ -38,7 +39,10 @@ app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 // 6. Cookie Parser
 app.use(cookieParser());
 
-// 7. Mount API v1
+// 7. Ensure MongoDB connection (serverless & long-running runtimes)
+app.use(ensureDbConnected);
+
+// 8. Mount API v1
 app.use('/api/v1', v1Routes);
 
 // Root greeting / API discovery

@@ -56,8 +56,16 @@ const handleShutdown = async (signal) => {
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 process.on('SIGINT', () => handleShutdown('SIGINT'));
 
-// Start server if executed directly (not in Vercel or test)
-if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
+// Start persistent HTTP server in local/dedicated environments
+// Avoid calling app.listen() in serverless runtimes (Vercel, AWS Lambda) or Jest tests
+const isServerless = Boolean(
+  process.env.VERCEL ||
+  process.env.VERCEL_ENV ||
+  process.env.NOW_REGION ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME
+);
+
+if (process.env.NODE_ENV !== 'test' && !isServerless) {
   startServer();
 }
 

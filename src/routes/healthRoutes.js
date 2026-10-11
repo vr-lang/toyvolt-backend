@@ -1,10 +1,20 @@
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import { env, hasResend, hasRazorpay, hasShiprocket, hasCloudinary } from '../config/env.js';
+import { connectDB } from '../config/database.js';
 
 const router = Router();
 
 router.get('/health', async (req, res) => {
+  // Ensure connection attempt in serverless environments if not already active
+  if (mongoose.connection.readyState !== 1) {
+    try {
+      await connectDB();
+    } catch {
+      // Ignored: readyState will remain 0 and report disconnected below
+    }
+  }
+
   const isConnected = mongoose.connection.readyState === 1;
   let dbPing = false;
   if (isConnected && mongoose.connection.db) {
