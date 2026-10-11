@@ -1,0 +1,82 @@
+{
+  "product": {
+    "name": "Toyvolt Apex-1 High-Speed RC Drift Car (1:16 Scale)",
+    "slug": "toyvolt-apex-1-rc-drift-car",
+    "sku": "TV-RC-001",
+    "description": "Engineered for pure adrenaline and high-speed drift control. The Toyvolt Apex-1 features a 2.4 GHz 4-channel remote system with 50m range, 35 km/h top speed, full proportional steering, and interchangeable TPR rubber drift tires. Powered by a high-output 7.4V 1200mAh rechargeable Li-Po battery providing up to 30 minutes of continuous action.",
+    "category": "Remote Control Cars",
+    "sellingPrice": 249900,
+    "compareAtPrice": 349900,
+    "costPrice": 120000,
+    "availableStock": 100,
+    "reservedStock": 0,
+    "weightGrams": 850,
+    "dimensions": {
+      "lengthCm": 32,
+      "breadthCm": 18,
+      "heightCm": 14
+    },
+    "specifications": {
+      "Scale": "1:16",
+      "Top Speed": "35 km/h",
+      "Control Frequency": "2.4 GHz Proportional",
+      "Control Range": "50 meters",
+      "Battery": "7.4V 1200mAh Li-Po (Rechargeable)",
+      "Play Time": "25-30 minutes",
+      "Charging Time": "90 minutes via USB",
+      "Drive System": "4-Wheel Drive (4WD)",
+      "Chassis": "Reinforced High-Impact Polycarbonate"
+    },
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1594787318286-3d835c1d207f?auto=format&fit=crop&w=1000&q=80",
+        "publicId": "toyvolt/apex-1-front",
+        "isPrimary": true
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1581235720704-06d3acfcb36f?auto=format&fit=crop&w=1000&q=80",
+        "publicId": "toyvolt/apex-1-action",
+        "isPrimary": false
+      }
+    ],
+    "isActive": true
+  },
+  "coupons": [
+    {
+      "code": "WELCOME100",
+      "description": "Flat ₹100 OFF for new customers on their first purchase",
+      "discountType": "flat",
+      "discountValue": 10000,
+      "minOrderValue": 99900,
+      "maxDiscountValue": null,
+      "globalUsageLimit": 10000,
+      "perCustomerLimit": 1,
+      "isActive": true,
+      "validDays": 365
+    },
+    {
+      "code": "SPEED200",
+      "description": "Influencer exclusive discount: ₹200 OFF on orders above ₹1,999",
+      "discountType": "flat",
+      "discountValue": 20000,
+      "minOrderValue": 199900,
+      "maxDiscountValue": null,
+      "globalUsageLimit": 500,
+      "perCustomerLimit": 1,
+      "isActive": true,
+      "validDays": 90
+    },
+    {
+      "code": "DRIFT10",
+      "description": "10% OFF on all orders up to ₹500 discount",
+      "discountType": "percentage",
+      "discountValue": 10,
+      "minOrderValue": 149900,
+      "maxDiscountValue": 50000,
+      "globalUsageLimit": 1000,
+      "perCustomerLimit": 2,
+      "isActive": true,
+      "validDays": 90
+    }
+  ]
+}

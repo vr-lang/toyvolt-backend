@@ -1,0 +1,83 @@
+import mongoose from 'mongoose';
+
+const trackingEventSchema = new mongoose.Schema({
+  status: { type: String, required: true },
+  activity: { type: String, required: true },
+  date: { type: Date, required: true },
+  location: { type: String, default: '' }
+}, { _id: false });
+
+const shipmentSchema = new mongoose.Schema({
+  orderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Order',
+    required: true,
+    index: true
+  },
+  shiprocketOrderId: {
+    type: String,
+    required: true,
+    index: true
+  },
+  shiprocketShipmentId: {
+    type: String,
+    default: null,
+    index: true
+  },
+  awbCode: {
+    type: String,
+    default: null,
+    index: true
+  },
+  courierName: {
+    type: String,
+    default: null
+  },
+  courierCompanyId: {
+    type: String,
+    default: null
+  },
+  pickupLocation: {
+    type: String,
+    default: 'Primary'
+  },
+  status: {
+    type: String,
+    enum: [
+      'CREATED',
+      'AWB_ASSIGNED',
+      'PICKUP_SCHEDULED',
+      'PICKED_UP',
+      'IN_TRANSIT',
+      'OUT_FOR_DELIVERY',
+      'DELIVERED',
+      'CANCELLED',
+      'RTO_INITIATED',
+      'RTO_DELIVERED'
+    ],
+    default: 'CREATED',
+    index: true
+  },
+  trackingUrl: {
+    type: String,
+    default: null
+  },
+  labelUrl: {
+    type: String,
+    default: null
+  },
+  manifestUrl: {
+    type: String,
+    default: null
+  },
+  trackingHistory: [trackingEventSchema],
+  rawWebhooks: [{
+    event: { type: String },
+    receivedAt: { type: Date, default: Date.now },
+    payload: { type: mongoose.Schema.Types.Mixed }
+  }]
+}, {
+  timestamps: true
+});
+
+export const Shipment = mongoose.model('Shipment', shipmentSchema);

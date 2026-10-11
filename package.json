@@ -1,0 +1,60 @@
+{
+  "name": "toyvolt-backend",
+  "version": "1.0.0",
+  "description": "Production-grade backend for Toyvolt e-commerce brand",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js --runInBand --detectOpenHandles --forceExit",
+    "seed:product": "node src/scripts/seedProducts.js",
+    "seed:admin": "node src/scripts/seedAdmin.js"
+  },
+  "keywords": [
+    "toyvolt",
+    "ecommerce",
+    "express",
+    "mongodb",
+    "razorpay",
+    "shiprocket",
+    "resend"
+  ],
+  "author": "Toyvolt Engineering",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.7.9",
+    "bcrypt": "^5.1.1",
+    "cloudinary": "^2.5.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.5",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1",
+    "razorpay": "^2.9.5",
+    "resend": "^4.1.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "mongodb-memory-server": "^10.1.3",
+    "nodemon": "^3.1.9",
+    "supertest": "^7.0.0"
+  },
+  "jest": {
+    "testEnvironment": "node",
+    "testMatch": [
+      "**/tests/**/*.test.js"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/setup.js"
+    ],
+    "transform": {},
+    "verbose": true
+  }
+}
