@@ -28,6 +28,13 @@ const handleJWTError = () =>
 const handleJWTExpiredError = () =>
   new AppError('Your session has expired. Please log in again.', 401);
 
+const handleMulterError = (err) => {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return new AppError('File is too large. Maximum allowed image size is 5MB.', 400);
+  }
+  return new AppError(`File upload error: ${err.message}`, 400);
+};
+
 export const errorHandler = (err, req, res, next) => {
   err.statusCode = err.statusCode || 500;
   err.status = err.status || 'error';
@@ -42,6 +49,7 @@ export const errorHandler = (err, req, res, next) => {
   if (err.name === 'ValidationError') error = handleValidationErrorDB(err);
   if (err.name === 'JsonWebTokenError') error = handleJWTError();
   if (err.name === 'TokenExpiredError') error = handleJWTExpiredError();
+  if (err.name === 'MulterError') error = handleMulterError(err);
 
   if (env.NODE_ENV === 'development' || env.NODE_ENV === 'test') {
     logger.error(`${req.method} ${req.originalUrl} - ${err.message}`, err);

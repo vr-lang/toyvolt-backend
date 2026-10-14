@@ -2,10 +2,12 @@ import { Router } from 'express';
 import {
   getDashboardMetrics,
   getAdminProducts,
+  getAdminProductById,
   createProduct,
   updateProduct,
   deleteProduct,
   uploadProductImage,
+  deleteProductImage,
   getAdminOrders,
   getAdminOrderById,
   updateOrderStatus,
@@ -17,7 +19,8 @@ import {
   getAdminShipments,
   createAdminShipment,
   getAdminShipmentByOrderId,
-  getSalesAnalytics
+  getSalesAnalytics,
+  getAnalyticsOverview
 } from '../controllers/adminController.js';
 import { protect } from '../middleware/authMiddleware.js';
 import { requireAdmin } from '../middleware/adminMiddleware.js';
@@ -41,13 +44,17 @@ router.use(protect, requireAdmin);
 // 1. Dashboard & Analytics
 router.get('/dashboard', getDashboardMetrics);
 router.get('/analytics/sales', getSalesAnalytics);
+router.get('/analytics/overview', getAnalyticsOverview);
 
 // 2. Product Management
 router.get('/products', getAdminProducts);
+router.get('/products/:id', getAdminProductById);
 router.post('/products', validate(createProductSchema), createProduct);
+router.put('/products/:id', validate(updateProductSchema), updateProduct);
 router.patch('/products/:id', validate(updateProductSchema), updateProduct);
 router.delete('/products/:id', deleteProduct);
 router.post('/upload', multerUpload.single('image'), uploadProductImage);
+router.delete('/upload', deleteProductImage);
 
 // 3. Order Management
 router.get('/orders', getAdminOrders);

@@ -1,18 +1,23 @@
 import { Product } from '../models/Product.js';
 import { Order } from '../models/Order.js';
 import { AppError } from '../utils/AppError.js';
+import { deleteCloudinaryImage } from '../config/cloudinary.js';
 
 class ProductService {
   async getProducts({
     search,
     category,
     inStockOnly,
+    includeArchived,
     sort = 'newest',
     page = 1,
     limit = 12,
     isAdmin = false
   }) {
-    const filter = { isArchived: false };
+    const filter = {};
+    if (!(isAdmin && (includeArchived === 'true' || includeArchived === true))) {
+      filter.isArchived = false;
+    }
 
     if (!isAdmin) {
       filter.isActive = true;
@@ -86,7 +91,7 @@ class ProductService {
     if (!isAdmin) query.select('-costPrice');
 
     const product = await query;
-    if (!product || product.isArchived) {
+    if (!product || (!isAdmin && product.isArchived)) {
       throw new AppError('Product not found.', 404);
     }
 
@@ -114,6 +119,11 @@ class ProductService {
   }
 
   async updateProduct(id, data) {
+    const existingProduct = await Product.findById(id);
+    if (!existingProduct) {
+      throw new AppError('Product not found.', 404);
+    }
+
     if (data.sku) {
       const existingSku = await Product.findOne({
         sku: data.sku.toUpperCase(),
@@ -130,13 +140,28 @@ class ProductService {
       if (existingSlug) throw new AppError(`Slug "${data.slug}" is already in use.`, 409);
     }
 
+    const nextSellingPrice = data.sellingPrice !== undefined ? data.sellingPrice : existingProduct.sellingPrice;
+    const nextCompareAtPrice = data.compareAtPrice !== undefined ? data.compareAtPrice : existingProduct.compareAtPrice;
+    if (nextCompareAtPrice !== null && nextCompareAtPrice !== undefined && nextCompareAtPrice < nextSellingPrice) {
+      throw new AppError('Compare-at price cannot be less than selling price.', 400);
+    }
+
+    // Track removed Cloudinary images if images array is being updated
+    let removedPublicIds = [];
+    if (Array.isArray(data.images) && Array.isArray(existingProduct.images)) {
+      const newPublicIds = new Set(data.images.map(img => img.publicId).filter(Boolean));
+      removedPublicIds = existingProduct.images
+        .map(img => img.publicId)
+        .filter(pubId => pubId && !newPublicIds.has(pubId));
+    }
+
     const product = await Product.findByIdAndUpdate(id, data, {
       new: true,
       runValidators: true
     });
 
-    if (!product) {
-      throw new AppError('Product not found.', 404);
+    if (removedPublicIds.length > 0) {
+      await Promise.allSettled(removedPublicIds.map(pubId => deleteCloudinaryImage(pubId)));
     }
 
     return product;
@@ -152,16 +177,26 @@ class ProductService {
     const orderWithProduct = await Order.findOne({ 'items.productId': id });
 
     if (orderWithProduct) {
-      // Soft-delete / safe archive
+      // Soft-delete / safe archive (preserve images for historical orders)
       product.isActive = false;
       product.isArchived = true;
       await product.save();
       return { message: 'Product has associated orders and was safely archived.', isArchived: true };
     } else {
+      const publicIds = (product.images || [])
+        .map(img => img.publicId)
+        .filter(Boolean);
+
       await Product.findByIdAndDelete(id);
+
+      if (publicIds.length > 0) {
+        await Promise.allSettled(publicIds.map(pubId => deleteCloudinaryImage(pubId)));
+      }
+
       return { message: 'Product permanently deleted.', isArchived: false };
     }
   }
 }
 
 export const productService = new ProductService();
+

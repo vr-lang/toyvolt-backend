@@ -1,9 +1,11 @@
+import { jest } from '@jest/globals';
 import request from 'supertest';
 import app from '../../src/app.js';
 import { User } from '../../src/models/User.js';
 import { Product } from '../../src/models/Product.js';
 import { Order } from '../../src/models/Order.js';
 import { generateAccessToken } from '../../src/utils/token.js';
+import { cloudinary } from '../../src/config/cloudinary.js';
 
 describe('Products & Admin Authorization Integration Tests', () => {
   let customerToken;
@@ -138,4 +140,95 @@ describe('Products & Admin Authorization Integration Tests', () => {
     expect(updated.isArchived).toBe(true);
     expect(updated.isActive).toBe(false);
   });
+
+  test('Admin can list products (including costPrice) and fetch single product by ID', async () => {
+    const listRes = await request(app)
+      .get('/api/v1/admin/products')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.data.products[0].costPrice).toBe(120000);
+
+    const detailRes = await request(app)
+      .get(`/api/v1/admin/products/${sampleProduct._id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body.data.product.sku).toBe('TV-RC-001');
+    expect(detailRes.body.data.product.costPrice).toBe(120000);
+  });
+
+  test('Admin can update product via PATCH and PUT and validates compareAtPrice >= sellingPrice', async () => {
+    const patchRes = await request(app)
+      .patch(`/api/v1/admin/products/${sampleProduct._id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        availableStock: 75,
+        sellingPrice: 229900,
+        compareAtPrice: 279900
+      });
+
+    expect(patchRes.status).toBe(200);
+    expect(patchRes.body.data.product.availableStock).toBe(75);
+    expect(patchRes.body.data.product.sellingPrice).toBe(229900);
+    expect(patchRes.body.data.product.compareAtPrice).toBe(279900);
+
+    // Reject invalid compareAtPrice < sellingPrice
+    const badPriceRes = await request(app)
+      .put(`/api/v1/admin/products/${sampleProduct._id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        compareAtPrice: 100000 // less than existing sellingPrice 229900
+      });
+
+    expect(badPriceRes.status).toBe(400);
+  });
+
+  test('Permanently deletes product when not referenced in any order', async () => {
+    const deleteRes = await request(app)
+      .delete(`/api/v1/admin/products/${sampleProduct._id}`)
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(deleteRes.status).toBe(200);
+    expect(deleteRes.body.data.isArchived).toBe(false);
+
+    const checkDeleted = await Product.findById(sampleProduct._id);
+    expect(checkDeleted).toBeNull();
+  });
+
+  test('Admin can upload and delete a product image', async () => {
+    const uploadSpy = jest.spyOn(cloudinary.uploader, 'upload_stream').mockImplementation((_opts, cb) => {
+      return {
+        end: () => cb(null, {
+          secure_url: 'https://res.cloudinary.com/demo/image/upload/v1/toyvolt/products/rc-car.png',
+          public_id: 'toyvolt/products/rc-car'
+        })
+      };
+    });
+    const destroySpy = jest.spyOn(cloudinary.uploader, 'destroy').mockResolvedValue({ result: 'ok' });
+
+    const fakeImageBuffer = Buffer.from('fake-png-content');
+    const uploadRes = await request(app)
+      .post('/api/v1/admin/upload')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .attach('image', fakeImageBuffer, { filename: 'rc-car.png', contentType: 'image/png' });
+
+    expect(uploadRes.status).toBe(200);
+    expect(uploadRes.body.success).toBe(true);
+    expect(uploadRes.body.data.url).toBeDefined();
+    expect(uploadRes.body.data.publicId).toBeDefined();
+
+    const delImgRes = await request(app)
+      .delete('/api/v1/admin/upload')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ publicId: uploadRes.body.data.publicId });
+
+    expect(delImgRes.status).toBe(200);
+    expect(delImgRes.body.success).toBe(true);
+
+    uploadSpy.mockRestore();
+    destroySpy.mockRestore();
+  });
 });
+
+

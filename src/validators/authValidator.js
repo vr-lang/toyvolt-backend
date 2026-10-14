@@ -16,8 +16,18 @@ export const resendOtpSchema = z.object({
   purpose: z.enum(['register', 'password_reset']).default('register')
 });
 
+export const setupAdminSchema = z.object({
+  adminId: z.string().min(3, 'Admin ID must be at least 3 characters').max(100),
+  name: z.string().min(2, 'Name must be at least 2 characters').max(100).optional(),
+  password: z.string().min(8, 'Password must be at least 8 characters long'),
+  confirmPassword: z.string().min(8, 'Confirm password must be at least 8 characters long')
+}).refine((data) => data.password === data.confirmPassword, {
+  message: 'Passwords do not match',
+  path: ['confirmPassword']
+});
+
 export const loginSchema = z.object({
-  email: z.string().email('Please enter a valid email address'),
+  email: z.string().min(1, 'Email or Admin ID is required'),
   password: z.string().min(1, 'Password is required')
 });
 

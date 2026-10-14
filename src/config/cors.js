@@ -6,7 +6,11 @@ const allowedOrigins = [
   env.ADMIN_URL,
   'http://localhost:3000',
   'http://localhost:5173',
-  'http://127.0.0.1:5173'
+  'http://127.0.0.1:5173',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
+  'https://admin.toyvolt.com',
+  'https://toyvolt.com'
 ].filter(Boolean);
 
 export const corsOptions = {
@@ -14,7 +18,8 @@ export const corsOptions = {
     // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
     if (!origin) return callback(null, true);
 
-    if (allowedOrigins.indexOf(origin) !== -1 || env.NODE_ENV === 'development') {
+    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    if (allowedOrigins.indexOf(origin) !== -1 || isLocalhost || env.NODE_ENV === 'development') {
       return callback(null, true);
     }
 

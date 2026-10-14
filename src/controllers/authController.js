@@ -101,3 +101,27 @@ export const resetPassword = asyncHandler(async (req, res) => {
     message: result.message
   });
 });
+
+export const getSetupStatus = asyncHandler(async (req, res) => {
+  const result = await authService.getSetupStatus();
+  res.status(200).json({
+    success: true,
+    data: result
+  });
+});
+
+export const setupInitialAdmin = asyncHandler(async (req, res) => {
+  const { user, accessToken, refreshToken } = await authService.setupInitialAdmin(req.body);
+
+  // Set secure HTTP-only cookies
+  setAuthCookies(res, { accessToken, refreshToken });
+
+  res.status(201).json({
+    success: true,
+    message: 'Initial administrator account created successfully. Setup is now permanently closed.',
+    data: {
+      user,
+      accessToken
+    }
+  });
+});

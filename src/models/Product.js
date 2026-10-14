@@ -43,16 +43,16 @@ const productSchema = new mongoose.Schema({
   sellingPrice: {
     type: Number,
     required: [true, 'Selling price is required in integer paise'],
-    min: [0, 'Price must be positive']
+    min: [1, 'Price must be positive']
   },
   compareAtPrice: {
     type: Number,
-    min: [0, 'Compare-at price must be positive'],
+    min: [1, 'Compare-at price must be positive'],
     default: null
   },
   costPrice: {
     type: Number,
-    min: [0, 'Cost price must be positive'],
+    min: [1, 'Cost price must be positive'],
     default: null // Admin only
   },
   availableStock: {

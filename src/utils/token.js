@@ -23,11 +23,12 @@ export const verifyRefreshToken = (token) => {
 
 export const setAuthCookies = (res, { accessToken, refreshToken }) => {
   const isProduction = env.NODE_ENV === 'production';
+  const isHttps = isProduction || Boolean(process.env.RENDER) || (res.req && (res.req.secure || res.req.headers['x-forwarded-proto'] === 'https'));
 
   const cookieOptions = {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    secure: isHttps,
+    sameSite: isHttps ? 'none' : 'lax',
     path: '/'
   };
 
@@ -48,11 +49,12 @@ export const setAuthCookies = (res, { accessToken, refreshToken }) => {
 
 export const clearAuthCookies = (res) => {
   const isProduction = env.NODE_ENV === 'production';
+  const isHttps = isProduction || Boolean(process.env.RENDER) || (res.req && (res.req.secure || res.req.headers['x-forwarded-proto'] === 'https'));
 
   const cookieOptions = {
     httpOnly: true,
-    secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    secure: isHttps,
+    sameSite: isHttps ? 'none' : 'lax',
     path: '/'
   };
 

@@ -12,8 +12,10 @@ import v1Routes from './routes/index.js';
 
 const app = express();
 
-// 1. Security Headers
-app.use(helmet());
+// 1. Security Headers (allow cross-origin API consumption by frontend apps)
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+}));
 
 // 2. CORS allowlist with credentials
 app.use(corsMiddleware);

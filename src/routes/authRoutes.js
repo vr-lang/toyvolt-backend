@@ -8,7 +8,9 @@ import {
   getMe,
   refreshToken,
   forgotPassword,
-  resetPassword
+  resetPassword,
+  getSetupStatus,
+  setupInitialAdmin
 } from '../controllers/authController.js';
 import { protect } from '../middleware/authMiddleware.js';
 import { authLimiter, otpLimiter } from '../middleware/rateLimiter.js';
@@ -19,10 +21,15 @@ import {
   resendOtpSchema,
   loginSchema,
   forgotPasswordSchema,
-  resetPasswordSchema
+  resetPasswordSchema,
+  setupAdminSchema
 } from '../validators/authValidator.js';
 
 const router = Router();
+
+// One-time Admin Setup endpoints
+router.get('/setup-status', getSetupStatus);
+router.post('/setup', authLimiter, validate(setupAdminSchema), setupInitialAdmin);
 
 router.post('/register', authLimiter, validate(registerSchema), register);
 router.post('/verify-email', authLimiter, validate(verifyEmailSchema), verifyEmail);

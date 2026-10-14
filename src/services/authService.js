@@ -113,9 +113,12 @@ class AuthService {
   }
 
   async login({ email, password }) {
-    const normalizedEmail = email.toLowerCase().trim();
+    const rawInput = (email || '').toLowerCase().trim();
+    const candidateEmail = rawInput.includes('@') ? rawInput : `${rawInput}@toyvolt.com`;
 
-    const user = await User.findOne({ email: normalizedEmail }).select('+password');
+    const user = await User.findOne({
+      $or: [{ email: rawInput }, { email: candidateEmail }]
+    }).select('+password');
     if (!user || !(await user.comparePassword(password))) {
       throw new AppError('Invalid email or password.', 401);
     }
@@ -205,6 +208,48 @@ class AuthService {
 
     return {
       message: 'Password has been successfully updated. You may now log in with your new password.'
+    };
+  }
+
+  async getSetupStatus() {
+    const adminCount = await User.countDocuments({ role: 'admin' });
+    return {
+      hasAdmin: adminCount > 0,
+      isSetupRequired: adminCount === 0
+    };
+  }
+
+  async setupInitialAdmin({ adminId, email, name, password }) {
+    // Atomic check: Ensure NO administrator currently exists
+    const existingAdmin = await User.findOne({ role: 'admin' });
+    if (existingAdmin) {
+      throw new AppError('Initial administrator has already been configured. Public setup is permanently disabled.', 403);
+    }
+
+    const rawId = (email || adminId || '').toLowerCase().trim();
+    const normalizedEmail = rawId.includes('@') ? rawId : `${rawId}@toyvolt.com`;
+
+    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(normalizedEmail)) {
+      throw new AppError('Please provide a valid Admin Email address or identifier.', 400);
+    }
+
+    // Atomic creation
+    const admin = await User.create({
+      name: (name || 'Toyvolt Administrator').trim(),
+      email: normalizedEmail,
+      password,
+      role: 'admin',
+      isEmailVerified: true,
+      accountStatus: 'active'
+    });
+
+    const accessToken = generateAccessToken({ id: admin._id, role: admin.role });
+    const refreshToken = generateRefreshToken({ id: admin._id });
+
+    return {
+      user: admin,
+      accessToken,
+      refreshToken
     };
   }
 }

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const createProductSchema = z.object({
+const baseProductSchema = z.object({
   name: z.string().min(2).max(200),
   slug: z.string().min(2).toLowerCase().trim(),
   sku: z.string().min(2).toUpperCase().trim(),
@@ -25,4 +25,27 @@ export const createProductSchema = z.object({
   isActive: z.boolean().optional().default(true)
 });
 
-export const updateProductSchema = createProductSchema.partial();
+export const createProductSchema = baseProductSchema.refine(
+  (data) => data.compareAtPrice == null || data.compareAtPrice >= data.sellingPrice,
+  {
+    message: 'Compare-at price must be greater than or equal to selling price',
+    path: ['compareAtPrice']
+  }
+);
+
+export const updateProductSchema = baseProductSchema
+  .partial()
+  .refine((data) => Object.keys(data).length > 0, {
+    message: 'At least one field must be provided for product update'
+  })
+  .refine(
+    (data) =>
+      data.compareAtPrice == null ||
+      data.sellingPrice == null ||
+      data.compareAtPrice >= data.sellingPrice,
+    {
+      message: 'Compare-at price must be greater than or equal to selling price',
+      path: ['compareAtPrice']
+    }
+  );
+
