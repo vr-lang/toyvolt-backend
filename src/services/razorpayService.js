@@ -77,8 +77,27 @@ class RazorpayService {
       const razorpayOrder = await rzp.orders.create(options);
       return razorpayOrder;
     } catch (error) {
-      logger.error('Failed to create Razorpay order:', error);
-      throw new AppError(`Payment provider error: ${error.error?.description || error.message}`, 502);
+      const description = error.error?.description || error.message || 'Unknown payment provider error';
+      const statusCode = error.statusCode || 500;
+
+      logger.error(`Failed to create Razorpay order for receipt ${receipt}:`, {
+        statusCode,
+        errorCode: error.error?.code,
+        description
+      });
+
+      if (statusCode === 401 || description.toLowerCase().includes('authentication failed')) {
+        logger.error(
+          '[CRITICAL] Razorpay API Authentication Failed (HTTP 401). ' +
+          'The RAZORPAY_KEY_ID or RAZORPAY_KEY_SECRET configured on this server is invalid, deactivated, or mismatched with the Razorpay Dashboard.'
+        );
+        throw new AppError(
+          'Payment gateway authentication failed on server. Please verify the active Razorpay API Key ID and Key Secret in your server environment.',
+          502
+        );
+      }
+
+      throw new AppError(`Payment provider error: ${description}`, 502);
     }
   }
 
