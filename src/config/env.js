@@ -42,6 +42,7 @@ const envSchema = z.object({
   CLOUDINARY_API_SECRET: z.string().optional().default(''),
 
   // Razorpay
+  PAYMENTS_MODE: z.enum(['test', 'live']).default('test'),
   RAZORPAY_KEY_ID: z.string().optional().default(''),
   RAZORPAY_KEY_SECRET: z.string().optional().default(''),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
@@ -51,6 +52,14 @@ const envSchema = z.object({
   SHIPROCKET_PASSWORD: z.string().optional().default(''),
   SHIPROCKET_WEBHOOK_SECRET: z.string().optional().default(''),
   SHIPROCKET_PICKUP_LOCATION: z.string().default('Primary')
+}).superRefine((data, ctx) => {
+  if (data.PAYMENTS_MODE === 'test' && data.RAZORPAY_KEY_ID && data.RAZORPAY_KEY_ID.startsWith('rzp_live_')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'CRITICAL SECURITY SAFEGUARD: Live Razorpay credentials (rzp_live_*) detected while PAYMENTS_MODE=test. Server refused to initialize in test mode with live credentials.',
+      path: ['RAZORPAY_KEY_ID']
+    });
+  }
 });
 
 const parsed = envSchema.safeParse(process.env);
@@ -67,5 +76,7 @@ export const env = parsed.data || envSchema.parse({});
 // Feature availability helpers
 export const hasResend = () => Boolean(env.RESEND_API_KEY);
 export const hasRazorpay = () => Boolean(env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET);
+export const isPaymentsTestMode = () => env.PAYMENTS_MODE === 'test';
 export const hasShiprocket = () => Boolean(env.SHIPROCKET_EMAIL && env.SHIPROCKET_PASSWORD);
 export const hasCloudinary = () => Boolean(env.CLOUDINARY_CLOUD_NAME && env.CLOUDINARY_API_KEY && env.CLOUDINARY_API_SECRET);
+

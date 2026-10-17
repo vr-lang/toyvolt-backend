@@ -126,7 +126,7 @@ class AuthService {
     if (!user.isEmailVerified) {
       // Send a fresh OTP to help user verify
       otpService.generateAndSendOtp({
-        email: normalizedEmail,
+        email: user.email,
         name: user.name,
         purpose: 'register'
       }).catch(() => {});

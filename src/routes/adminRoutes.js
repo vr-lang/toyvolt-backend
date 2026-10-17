@@ -11,14 +11,21 @@ import {
   getAdminOrders,
   getAdminOrderById,
   updateOrderStatus,
+  createAdminOrder,
   getAdminCustomers,
   updateCustomerStatus,
   getAdminCoupons,
   createAdminCoupon,
   updateAdminCoupon,
   getAdminShipments,
+  getAdminShipmentById,
   createAdminShipment,
   getAdminShipmentByOrderId,
+  syncShipmentTelemetry,
+  resolveShipmentNdr,
+  bulkNdrReattempt,
+  getShipmentLabel,
+  getShipmentManifest,
   getSalesAnalytics,
   getAnalyticsOverview
 } from '../controllers/adminController.js';
@@ -58,6 +65,7 @@ router.delete('/upload', deleteProductImage);
 
 // 3. Order Management
 router.get('/orders', getAdminOrders);
+router.post('/orders', createAdminOrder);
 router.get('/orders/:id', getAdminOrderById);
 router.patch('/orders/:id/status', validate(updateOrderStatusSchema), updateOrderStatus);
 
@@ -72,7 +80,13 @@ router.patch('/coupons/:id', validate(updateCouponSchema), updateAdminCoupon);
 
 // 6. Shipment Management
 router.get('/shipments', getAdminShipments);
+router.post('/shipments/sync', syncShipmentTelemetry);
+router.post('/shipments/bulk/ndr-reattempt', bulkNdrReattempt);
 router.post('/shipments/:orderId/create', createAdminShipment);
-router.get('/shipments/:orderId', getAdminShipmentByOrderId);
+router.get('/shipments/:id', getAdminShipmentById);
+router.get('/shipments/:id/label', getShipmentLabel);
+router.get('/shipments/:id/manifest', getShipmentManifest);
+router.post('/shipments/:id/ndr/resolve', resolveShipmentNdr);
+router.get('/shipments/order/:orderId', getAdminShipmentByOrderId);
 
 export default router;

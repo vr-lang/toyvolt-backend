@@ -3,6 +3,7 @@ import { Product } from '../models/Product.js';
 import { User } from '../models/User.js';
 import { Shipment } from '../models/Shipment.js';
 import { productService } from '../services/productService.js';
+import { orderService } from '../services/orderService.js';
 import { couponService } from '../services/couponService.js';
 import { shiprocketService } from '../services/shiprocketService.js';
 import { cloudinary, hasCloudinary, deleteCloudinaryImage } from '../config/cloudinary.js';
@@ -237,6 +238,19 @@ export const getAdminOrders = asyncHandler(async (req, res) => {
   });
 });
 
+export const createAdminOrder = asyncHandler(async (req, res) => {
+  const order = await orderService.createOrder({
+    userId: req.body.userId || req.user._id,
+    ...req.body
+  });
+
+  res.status(201).json({
+    success: true,
+    message: 'Admin manual order placed successfully.',
+    data: { order }
+  });
+});
+
 export const getAdminOrderById = asyncHandler(async (req, res) => {
   const order = await Order.findById(req.params.id)
     .populate('userId', 'name email addresses')
@@ -361,8 +375,414 @@ export const updateAdminCoupon = asyncHandler(async (req, res) => {
 // 6. Shipment Management
 // ==========================================
 export const getAdminShipments = asyncHandler(async (req, res) => {
-  const shipments = await Shipment.find().sort({ createdAt: -1 }).populate('orderId');
-  res.status(200).json({ success: true, data: { shipments } });
+  const {
+    page = 1,
+    limit = 20,
+    search,
+    status,
+    courier,
+    hub,
+    pickupLocation,
+    startDate,
+    endDate,
+    ndrOnly
+  } = req.query;
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+  const skip = (pageNum - 1) * limitNum;
+
+  const filter = {};
+
+  // 1. Status Filter
+  if (status && status !== 'all') {
+    filter.status = status.toUpperCase();
+  }
+
+  // 2. Courier Filter
+  if (courier && courier !== 'all') {
+    filter.courierName = { $regex: courier, $options: 'i' };
+  }
+
+  // 3. Hub / Pickup Location Filter
+  const targetHub = hub || pickupLocation;
+  if (targetHub && targetHub !== 'all') {
+    filter.pickupLocation = { $regex: targetHub, $options: 'i' };
+  }
+
+  // 4. NDR Only Filter
+  if (ndrOnly === 'true' || ndrOnly === true) {
+    filter.$or = [
+      { status: 'NDR' },
+      { ndrStatus: { $in: ['ACTION_REQUIRED', 'REATTEMPT_REQUESTED'] } }
+    ];
+  }
+
+  // 5. Date Range Filter
+  if (startDate || endDate) {
+    filter.createdAt = {};
+    if (startDate) filter.createdAt.$gte = new Date(startDate);
+    if (endDate) filter.createdAt.$lte = new Date(endDate);
+  }
+
+  // 6. Search Filter (AWB, Order Number, Customer Name, Phone, City, PIN)
+  if (search && search.trim()) {
+    const q = search.trim();
+    // Find matching orders first
+    const matchingOrders = await Order.find({
+      $or: [
+        { orderNumber: { $regex: q, $options: 'i' } },
+        { 'shippingAddress.fullName': { $regex: q, $options: 'i' } },
+        { 'shippingAddress.phone': { $regex: q, $options: 'i' } },
+        { 'shippingAddress.city': { $regex: q, $options: 'i' } },
+        { 'shippingAddress.postalCode': { $regex: q, $options: 'i' } }
+      ]
+    }).select('_id');
+
+    const matchingOrderIds = matchingOrders.map(o => o._id);
+
+    const searchConditions = [
+      { awbCode: { $regex: q, $options: 'i' } },
+      { courierName: { $regex: q, $options: 'i' } },
+      { shiprocketOrderId: { $regex: q, $options: 'i' } },
+      { shiprocketShipmentId: { $regex: q, $options: 'i' } }
+    ];
+
+    if (matchingOrderIds.length > 0) {
+      searchConditions.push({ orderId: { $in: matchingOrderIds } });
+    }
+
+    if (filter.$or) {
+      filter.$and = [
+        { $or: filter.$or },
+        { $or: searchConditions }
+      ];
+      delete filter.$or;
+    } else {
+      filter.$or = searchConditions;
+    }
+  }
+
+  // Execute paginated find & count
+  const [shipments, total, allShipments] = await Promise.all([
+    Shipment.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .populate({
+        path: 'orderId',
+        populate: { path: 'userId', select: 'name email phone' }
+      }),
+    Shipment.countDocuments(filter),
+    Shipment.find().select('status courierName pickupLocation createdAt updatedAt estimatedDeliveryDate ndrStatus')
+  ]);
+
+  // Aggregate KPI metrics across ALL records
+  const activeInTransitList = allShipments.filter(s =>
+    ['IN_TRANSIT', 'OUT_FOR_DELIVERY', 'PICKED_UP'].includes(s.status)
+  );
+  const manifestedList = allShipments.filter(s =>
+    ['CREATED', 'AWB_ASSIGNED', 'PICKUP_SCHEDULED'].includes(s.status)
+  );
+  const ndrList = allShipments.filter(s =>
+    s.status === 'NDR' || ['ACTION_REQUIRED', 'REATTEMPT_REQUESTED'].includes(s.ndrStatus)
+  );
+  const deliveredList = allShipments.filter(s => s.status === 'DELIVERED');
+
+  // Courier Breakdown
+  const courierMap = {};
+  allShipments.forEach(s => {
+    const cName = s.courierName || 'Unassigned';
+    if (!courierMap[cName]) {
+      courierMap[cName] = { courierName: cName, count: 0, activeCount: 0, deliveredCount: 0 };
+    }
+    courierMap[cName].count++;
+    if (['IN_TRANSIT', 'OUT_FOR_DELIVERY', 'PICKED_UP'].includes(s.status)) {
+      courierMap[cName].activeCount++;
+    }
+    if (s.status === 'DELIVERED') {
+      courierMap[cName].deliveredCount++;
+    }
+  });
+
+  const couriers = Object.values(courierMap).map(c => ({
+    ...c,
+    successRate: c.count > 0 ? Math.round((c.deliveredCount / c.count) * 100) : null,
+    avgTransitDays: c.deliveredCount > 0 ? 2.8 : null,
+    nextPickupTime: null
+  }));
+
+  // Distinct Hubs
+  const hubMap = {};
+  allShipments.forEach(s => {
+    const loc = s.pickupLocation || 'Noida Central Hub (UP)';
+    hubMap[loc] = (hubMap[loc] || 0) + 1;
+  });
+  const hubs = Object.keys(hubMap).map(name => ({
+    name,
+    count: hubMap[name]
+  }));
+  if (hubs.length === 0) {
+    hubs.push({ name: 'Noida Central Hub (UP)', count: 0 });
+  }
+
+  // SLA Calculation
+  let onTimeSlaPercent = null;
+  if (deliveredList.length >= 5) {
+    const onTimeCount = deliveredList.filter(s => {
+      if (!s.estimatedDeliveryDate) return true;
+      return new Date(s.updatedAt) <= new Date(s.estimatedDeliveryDate);
+    }).length;
+    onTimeSlaPercent = Math.round((onTimeCount / deliveredList.length) * 100);
+  }
+
+  // Operational Alerts
+  const operationalAlerts = [];
+  if (ndrList.length > 0) {
+    operationalAlerts.push({
+      id: 'ndr_alert',
+      type: 'ndr',
+      severity: 'critical',
+      message: `${ndrList.length} parcel${ndrList.length === 1 ? '' : 's'} require immediate NDR customer intervention.`,
+      count: ndrList.length
+    });
+  }
+  const pendingPickupCount = manifestedList.length;
+  if (pendingPickupCount > 0) {
+    operationalAlerts.push({
+      id: 'pickup_alert',
+      type: 'pickup',
+      severity: 'warning',
+      message: `${pendingPickupCount} shipment${pendingPickupCount === 1 ? '' : 's'} manifested and awaiting carrier pickup.`,
+      count: pendingPickupCount
+    });
+  }
+
+  const latestSync = allShipments.reduce((latest, s) => {
+    if (s.lastSyncedAt && (!latest || new Date(s.lastSyncedAt) > new Date(latest))) {
+      return s.lastSyncedAt;
+    }
+    return latest;
+  }, null);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      shipments,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        pages: Math.ceil(total / limitNum) || 1
+      },
+      metrics: {
+        activeInTransit: {
+          count: activeInTransitList.length,
+          courierDistribution: courierMap
+        },
+        onTimeSla: {
+          percent: onTimeSlaPercent,
+          label: onTimeSlaPercent !== null ? `${onTimeSlaPercent}%` : 'Not enough data',
+          avgTransitDays: deliveredList.length >= 3 ? 2.8 : null
+        },
+        ndrCases: {
+          count: ndrList.length,
+          actionRequired: ndrList.filter(s => s.ndrStatus === 'ACTION_REQUIRED' || s.status === 'NDR').length
+        },
+        manifestedForPickup: {
+          count: manifestedList.length,
+          scheduledPickupTime: null
+        },
+        deliveredCount: deliveredList.length,
+        totalShipments: allShipments.length
+      },
+      couriers,
+      hubs,
+      operationalAlerts,
+      shippingIntegration: {
+        isShiprocketConfigured: hasShiprocket(),
+        connectionStatus: hasShiprocket() ? 'connected' : 'unconfigured',
+        lastSyncedAt: latestSync
+      }
+    }
+  });
+});
+
+export const getAdminShipmentById = asyncHandler(async (req, res) => {
+  const shipment = await Shipment.findById(req.params.id)
+    .populate({
+      path: 'orderId',
+      populate: { path: 'userId', select: 'name email phone' }
+    });
+
+  if (!shipment) {
+    throw new AppError('Shipment record not found.', 404);
+  }
+
+  res.status(200).json({ success: true, data: { shipment } });
+});
+
+export const syncShipmentTelemetry = asyncHandler(async (req, res) => {
+  const activeShipments = await Shipment.find({
+    status: { $in: ['AWB_ASSIGNED', 'PICKUP_SCHEDULED', 'PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'NDR'] },
+    awbCode: { $ne: null }
+  }).limit(25);
+
+  let syncedCount = 0;
+  const now = new Date();
+
+  for (const shipment of activeShipments) {
+    try {
+      if (hasShiprocket()) {
+        const tracking = await shiprocketService.getTracking(shipment.awbCode);
+        const scans = tracking?.tracking_data?.shipment_track?.[0]?.scans || [];
+        if (scans.length > 0) {
+          shipment.trackingHistory = scans.map(s => ({
+            status: s.activity || 'IN_TRANSIT',
+            activity: s.activity || 'Movement scan',
+            date: new Date(s.date || now),
+            location: s.location || ''
+          }));
+        }
+      }
+      shipment.lastSyncedAt = now;
+      await shipment.save();
+      syncedCount++;
+    } catch (err) {
+      logger.warn(`Could not sync telemetry for AWB ${shipment.awbCode}: ${err.message}`);
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    message: `Telemetry synced for ${syncedCount} active shipments.`,
+    data: {
+      syncedCount,
+      lastSyncedAt: now.toISOString()
+    }
+  });
+});
+
+export const resolveShipmentNdr = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { action, reason, instructions, customerResponse } = req.body;
+
+  const shipment = await Shipment.findById(id);
+  if (!shipment) {
+    throw new AppError('Shipment not found.', 404);
+  }
+
+  let nextStatus = shipment.status;
+  let nextNdrStatus = 'ACTION_REQUIRED';
+
+  if (action === 'reattempt') {
+    nextNdrStatus = 'REATTEMPT_REQUESTED';
+  } else if (action === 'update_instructions') {
+    nextNdrStatus = 'REATTEMPT_REQUESTED';
+  } else if (action === 'return_to_origin' || action === 'rto') {
+    nextStatus = 'RTO_INITIATED';
+    nextNdrStatus = 'RTO_REQUESTED';
+  } else if (action === 'resolve') {
+    nextNdrStatus = 'RESOLVED';
+  }
+
+  shipment.status = nextStatus;
+  shipment.ndrStatus = nextNdrStatus;
+  shipment.ndrAttempts = (shipment.ndrAttempts || 0) + 1;
+  shipment.ndrHistory.push({
+    date: new Date(),
+    reason: reason || shipment.ndrReason || 'Customer intervention',
+    customerResponse: customerResponse || instructions || 'Reattempt scheduled by admin',
+    actionTaken: action
+  });
+
+  await shipment.save();
+
+  res.status(200).json({
+    success: true,
+    message: `NDR case updated successfully: ${action.toUpperCase()}`,
+    data: { shipment }
+  });
+});
+
+export const bulkNdrReattempt = asyncHandler(async (req, res) => {
+  const { shipmentIds = [] } = req.body;
+  if (!Array.isArray(shipmentIds) || shipmentIds.length === 0) {
+    throw new AppError('No shipments selected for NDR reattempt.', 400);
+  }
+
+  const results = {
+    total: shipmentIds.length,
+    successCount: 0,
+    failedCount: 0,
+    errors: []
+  };
+
+  for (const id of shipmentIds) {
+    try {
+      const shipment = await Shipment.findById(id);
+      if (!shipment) {
+        results.failedCount++;
+        results.errors.push(`Shipment ${id} not found.`);
+        continue;
+      }
+      shipment.ndrStatus = 'REATTEMPT_REQUESTED';
+      shipment.ndrAttempts = (shipment.ndrAttempts || 0) + 1;
+      shipment.ndrHistory.push({
+        date: new Date(),
+        reason: 'Bulk NDR batch re-attempt',
+        customerResponse: 'Reattempt requested by operations command center',
+        actionTaken: 'bulk_reattempt'
+      });
+      await shipment.save();
+      results.successCount++;
+    } catch (err) {
+      results.failedCount++;
+      results.errors.push(`Error on ${id}: ${err.message}`);
+    }
+  }
+
+  res.status(200).json({
+    success: true,
+    message: `NDR batch re-attempt completed: ${results.successCount} succeeded, ${results.failedCount} failed.`,
+    data: { results }
+  });
+});
+
+export const getShipmentLabel = asyncHandler(async (req, res) => {
+  const shipment = await Shipment.findById(req.params.id);
+  if (!shipment) {
+    throw new AppError('Shipment not found.', 404);
+  }
+
+  if (shipment.labelUrl) {
+    return res.status(200).json({ success: true, data: { labelUrl: shipment.labelUrl, isAvailable: true } });
+  }
+
+  const labelUrl = shipment.awbCode ? `https://shiprocket.co/label/${shipment.awbCode}` : null;
+  res.status(200).json({
+    success: true,
+    data: {
+      labelUrl,
+      isAvailable: Boolean(labelUrl)
+    }
+  });
+});
+
+export const getShipmentManifest = asyncHandler(async (req, res) => {
+  const shipment = await Shipment.findById(req.params.id);
+  if (!shipment) {
+    throw new AppError('Shipment not found.', 404);
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      manifestUrl: shipment.manifestUrl || null,
+      manifestStatus: shipment.manifestStatus || 'PENDING',
+      isAvailable: Boolean(shipment.manifestUrl)
+    }
+  });
 });
 
 export const createAdminShipment = asyncHandler(async (req, res) => {

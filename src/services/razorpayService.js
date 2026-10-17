@@ -6,45 +6,75 @@ import { logger } from '../utils/logger.js';
 
 let razorpayInstance = null;
 
-if (hasRazorpay()) {
-  razorpayInstance = new Razorpay({
-    key_id: env.RAZORPAY_KEY_ID,
-    key_secret: env.RAZORPAY_KEY_SECRET
-  });
-}
+export const getRazorpayInstance = () => {
+  if (razorpayInstance) return razorpayInstance;
+
+  if (hasRazorpay()) {
+    if (env.PAYMENTS_MODE === 'test' && env.RAZORPAY_KEY_ID.startsWith('rzp_live_')) {
+      throw new AppError(
+        'CRITICAL SECURITY SAFEGUARD: Live Razorpay key detected while PAYMENTS_MODE=test. Refusing to initialize with live credentials.',
+        500
+      );
+    }
+
+    razorpayInstance = new Razorpay({
+      key_id: env.RAZORPAY_KEY_ID,
+      key_secret: env.RAZORPAY_KEY_SECRET
+    });
+  }
+
+  return razorpayInstance;
+};
+
+// Eager initialization if credentials exist
+getRazorpayInstance();
 
 class RazorpayService {
   /**
    * Create Razorpay order for online payment
    * @param {Object} params
-   * @param {number} params.amount - Amount in integer paise
+   * @param {number} params.amount - Amount in integer paise (strictly server calculated)
    * @param {string} params.receipt - Internal orderNumber
+   * @param {Object} [params.notes] - Key-value metadata notes
    */
   async createRazorpayOrder({ amount, receipt, notes = {} }) {
-    if (!hasRazorpay() || !razorpayInstance || env.NODE_ENV === 'test') {
-      logger.info(`[Razorpay MOCK] Creating mock Razorpay order for receipt: ${receipt}, amount: ${amount} paise`);
+    const amountInPaise = Math.round(Number(amount));
+    if (!amountInPaise || amountInPaise <= 0 || !Number.isInteger(amountInPaise)) {
+      throw new AppError('Invalid order amount. Amount must be a positive integer in paise.', 400);
+    }
+
+    const rzp = getRazorpayInstance();
+
+    if (!hasRazorpay() || !rzp || env.NODE_ENV === 'test') {
+      logger.info(`[Razorpay TEST/MOCK] Creating test order for receipt: ${receipt}, amount: ${amountInPaise} paise`);
       return {
-        id: `order_mock_${Date.now()}`,
+        id: `order_test_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
         entity: 'order',
-        amount,
+        amount: amountInPaise,
         amount_paid: 0,
-        amount_due: amount,
+        amount_due: amountInPaise,
         currency: 'INR',
         receipt,
         status: 'created',
-        notes
+        notes: {
+          ...notes,
+          paymentsMode: env.PAYMENTS_MODE
+        }
       };
     }
 
     try {
       const options = {
-        amount, // integer paise
+        amount: amountInPaise, // integer paise strictly
         currency: 'INR',
         receipt,
-        notes
+        notes: {
+          ...notes,
+          paymentsMode: env.PAYMENTS_MODE
+        }
       };
 
-      const razorpayOrder = await razorpayInstance.orders.create(options);
+      const razorpayOrder = await rzp.orders.create(options);
       return razorpayOrder;
     } catch (error) {
       logger.error('Failed to create Razorpay order:', error);
@@ -54,17 +84,23 @@ class RazorpayService {
 
   /**
    * Verifies client-side Razorpay payment signature
-   * signature = HMAC_SHA256(order_id + "|" + payment_id, secret)
+   * Expected: HMAC_SHA256(order_id + "|" + payment_id, secret)
+   * Uses timing-safe string comparison to protect against timing attacks.
    */
   verifyPaymentSignature({ razorpayOrderId, razorpayPaymentId, razorpaySignature }) {
-    if (!hasRazorpay() || env.NODE_ENV === 'test') {
-      // Allow mock signatures during test or dev without credentials
-      if (razorpaySignature.startsWith('mock_sig_') || razorpaySignature === 'valid_test_signature') {
+    if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
+      return false;
+    }
+
+    const secret = env.RAZORPAY_KEY_SECRET;
+
+    // Support mock signature in test suites where secret is not configured
+    if (env.NODE_ENV === 'test') {
+      if (razorpaySignature === 'valid_test_signature' || razorpaySignature.startsWith('mock_sig_')) {
         return true;
       }
     }
 
-    const secret = env.RAZORPAY_KEY_SECRET;
     if (!secret) {
       throw new AppError('Payment service key secret is not configured on the server.', 500);
     }
@@ -75,15 +111,31 @@ class RazorpayService {
       .update(payload)
       .digest('hex');
 
-    return expectedSignature === razorpaySignature;
+    try {
+      const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+      const actualBuffer = Buffer.from(razorpaySignature, 'utf8');
+
+      if (expectedBuffer.length !== actualBuffer.length) {
+        return false;
+      }
+
+      return crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+    } catch {
+      return false;
+    }
   }
 
   /**
    * Verifies webhook signature using the exact raw body
    * Razorpay passes signature in header 'x-razorpay-signature'
+   * Uses timing-safe comparison.
    */
   verifyWebhookSignature({ rawBody, signature }) {
-    if (!hasRazorpay() || env.NODE_ENV === 'test') {
+    if (!signature) {
+      return false;
+    }
+
+    if (env.NODE_ENV === 'test') {
       if (signature === 'mock_webhook_sig' || signature === 'valid_test_webhook_sig') {
         return true;
       }
@@ -103,8 +155,20 @@ class RazorpayService {
       .update(rawBody)
       .digest('hex');
 
-    return expectedSignature === signature;
+    try {
+      const expectedBuffer = Buffer.from(expectedSignature, 'utf8');
+      const actualBuffer = Buffer.from(signature, 'utf8');
+
+      if (expectedBuffer.length !== actualBuffer.length) {
+        return false;
+      }
+
+      return crypto.timingSafeEqual(expectedBuffer, actualBuffer);
+    } catch {
+      return false;
+    }
   }
 }
 
 export const razorpayService = new RazorpayService();
+

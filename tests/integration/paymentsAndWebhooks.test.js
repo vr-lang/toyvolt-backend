@@ -113,6 +113,132 @@ describe('Razorpay Payments & Webhook Idempotency Integration Tests', () => {
     expect(prod.reservedStock).toBe(0);
   });
 
+  test('POST /api/v1/payments/verify rejects invalid payment signature with 400', async () => {
+    const razorpayOrderId = 'order_mock_test_invalid';
+    const razorpayPaymentId = 'pay_mock_test_invalid';
+    const badSignature = 'invalid_tampered_signature_99999999';
+
+    await Payment.create({
+      orderId: testOrder._id,
+      razorpayOrderId,
+      amount: testOrder.finalAmount,
+      status: 'created'
+    });
+
+    const res = await request(app)
+      .post('/api/v1/payments/verify')
+      .set('Authorization', `Bearer ${customerToken}`)
+      .send({
+        orderId: testOrder._id.toString(),
+        razorpayOrderId,
+        razorpayPaymentId,
+        razorpaySignature: badSignature
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toMatch(/invalid payment signature/i);
+
+    const order = await Order.findById(testOrder._id);
+    expect(order.paymentStatus).toBe('pending');
+
+    const payment = await Payment.findOne({ orderId: testOrder._id, razorpayOrderId });
+    expect(payment.status).toBe('failed');
+    expect(payment.errorCode).toBe('SIGNATURE_VERIFICATION_FAILED');
+  });
+
+  test('POST /api/v1/payments/verify handles duplicate verification calls idempotently', async () => {
+    const razorpayOrderId = 'order_mock_test_dup';
+    const razorpayPaymentId = 'pay_mock_test_dup';
+    const razorpaySignature = 'valid_test_signature';
+
+    await Payment.create({
+      orderId: testOrder._id,
+      razorpayOrderId,
+      amount: testOrder.finalAmount,
+      status: 'created'
+    });
+
+    // 1st verification
+    const res1 = await request(app)
+      .post('/api/v1/payments/verify')
+      .set('Authorization', `Bearer ${customerToken}`)
+      .send({
+        orderId: testOrder._id.toString(),
+        razorpayOrderId,
+        razorpayPaymentId,
+        razorpaySignature
+      });
+
+    expect(res1.status).toBe(200);
+    expect(res1.body.success).toBe(true);
+    expect(res1.body.data.order.paymentStatus).toBe('paid');
+
+    // 2nd duplicate verification
+    const res2 = await request(app)
+      .post('/api/v1/payments/verify')
+      .set('Authorization', `Bearer ${customerToken}`)
+      .send({
+        orderId: testOrder._id.toString(),
+        razorpayOrderId,
+        razorpayPaymentId,
+        razorpaySignature
+      });
+
+    expect(res2.status).toBe(200);
+    expect(res2.body.success).toBe(true);
+    expect(res2.body.data.order.paymentStatus).toBe('paid');
+  });
+
+  test('POST /api/v1/payments/verify rejects payment amount mismatch', async () => {
+    const razorpayOrderId = 'order_mock_test_mismatch';
+    const razorpayPaymentId = 'pay_mock_test_mismatch';
+    const razorpaySignature = 'valid_test_signature';
+
+    // Tampered payment record with different amount
+    await Payment.create({
+      orderId: testOrder._id,
+      razorpayOrderId,
+      amount: 10000, // 100 rupees instead of 2499 rupees
+      currency: 'INR',
+      status: 'created'
+    });
+
+    const res = await request(app)
+      .post('/api/v1/payments/verify')
+      .set('Authorization', `Bearer ${customerToken}`)
+      .send({
+        orderId: testOrder._id.toString(),
+        razorpayOrderId,
+        razorpayPaymentId,
+        razorpaySignature
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toMatch(/amount mismatch/i);
+  });
+
+  test('POST /api/v1/payments/create-order enforces customer order ownership', async () => {
+    const anotherUser = await User.create({
+      name: 'Another User',
+      email: 'another@toyvolt.test',
+      password: 'Password123!',
+      role: 'customer',
+      isEmailVerified: true
+    });
+    const anotherToken = generateAccessToken({ id: anotherUser._id, role: 'customer' });
+
+    const res = await request(app)
+      .post('/api/v1/payments/create-order')
+      .set('Authorization', `Bearer ${anotherToken}`)
+      .send({ orderId: testOrder._id.toString() });
+
+    expect(res.status).toBe(403);
+    expect(res.body.success).toBe(false);
+    expect(res.body.message).toMatch(/Access denied/i);
+  });
+
   test('POST /api/v1/webhooks/razorpay processes order.paid idempotently on retries', async () => {
     const razorpayOrderId = 'order_webhook_123';
     const razorpayPaymentId = 'pay_webhook_456';

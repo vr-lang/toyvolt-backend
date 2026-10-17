@@ -51,6 +51,7 @@ const shipmentSchema = new mongoose.Schema({
       'IN_TRANSIT',
       'OUT_FOR_DELIVERY',
       'DELIVERED',
+      'NDR',
       'CANCELLED',
       'RTO_INITIATED',
       'RTO_DELIVERED'
@@ -68,6 +69,48 @@ const shipmentSchema = new mongoose.Schema({
   },
   manifestUrl: {
     type: String,
+    default: null
+  },
+  manifestStatus: {
+    type: String,
+    enum: ['PENDING', 'MANIFESTED', 'HANDED_OVER'],
+    default: 'PENDING'
+  },
+  weightKg: {
+    type: Number,
+    default: 0.85
+  },
+  dimensions: {
+    length: { type: Number, default: 15 },
+    breadth: { type: Number, default: 10 },
+    height: { type: Number, default: 10 }
+  },
+  estimatedDeliveryDate: {
+    type: Date,
+    default: null
+  },
+  ndrReason: {
+    type: String,
+    default: null
+  },
+  ndrStatus: {
+    type: String,
+    enum: ['NONE', 'ACTION_REQUIRED', 'REATTEMPT_REQUESTED', 'RTO_REQUESTED', 'RESOLVED'],
+    default: 'NONE',
+    index: true
+  },
+  ndrAttempts: {
+    type: Number,
+    default: 0
+  },
+  ndrHistory: [{
+    date: { type: Date, default: Date.now },
+    reason: { type: String },
+    customerResponse: { type: String, default: '' },
+    actionTaken: { type: String, default: '' }
+  }],
+  lastSyncedAt: {
+    type: Date,
     default: null
   },
   trackingHistory: [trackingEventSchema],

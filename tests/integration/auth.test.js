@@ -13,6 +13,17 @@ describe('Auth & OTP Integration Tests', () => {
     password: 'Password123!'
   };
 
+  beforeEach(() => {
+    emailService.setResendClient({
+      emails: {
+        send: jest.fn().mockResolvedValue({
+          data: { id: 'mock_test_email_id' },
+          error: null
+        })
+      }
+    });
+  });
+
   test('POST /api/v1/auth/register creates unverified account and generates OTP', async () => {
     const res = await request(app)
       .post('/api/v1/auth/register')

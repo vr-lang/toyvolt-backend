@@ -80,7 +80,43 @@ export const verifyPayment = asyncHandler(async (req, res) => {
     throw new AppError('Order not found.', 404);
   }
 
-  // Verify signature
+  // Ensure customer ownership unless admin
+  if (req.user.role !== 'admin' && order.userId.toString() !== req.user._id.toString()) {
+    throw new AppError('Forbidden: Access denied to this order.', 403);
+  }
+
+  // Idempotency: If order is already paid, return 200 safely without duplicating processing
+  if (order.paymentStatus === 'paid') {
+    logger.info(`Duplicate payment verification received for already paid order ${order.orderNumber}. Returning confirmed order.`);
+    return res.status(200).json({
+      success: true,
+      message: 'Payment already verified and order confirmed.',
+      data: {
+        order
+      }
+    });
+  }
+
+  if (order.orderStatus === 'cancelled') {
+    throw new AppError('Cannot verify payment for a cancelled order.', 400);
+  }
+
+  // Verify associated payment record, currency and amount
+  const paymentRecord = await Payment.findOne({
+    orderId: order._id,
+    razorpayOrderId
+  });
+
+  if (paymentRecord) {
+    if (paymentRecord.amount !== order.finalAmount) {
+      throw new AppError('Payment amount mismatch between order and gateway session.', 400);
+    }
+    if (paymentRecord.currency !== 'INR') {
+      throw new AppError('Payment currency mismatch. Expected INR.', 400);
+    }
+  }
+
+  // Verify cryptographic signature with timing-safe comparison
   const isValid = razorpayService.verifyPaymentSignature({
     razorpayOrderId,
     razorpayPaymentId,
@@ -88,9 +124,9 @@ export const verifyPayment = asyncHandler(async (req, res) => {
   });
 
   if (!isValid) {
-    // Record failed payment
+    // Record failed payment attempt
     await Payment.findOneAndUpdate(
-      { orderId: order._id },
+      { orderId: order._id, razorpayOrderId },
       {
         status: 'failed',
         razorpayPaymentId,
@@ -101,7 +137,7 @@ export const verifyPayment = asyncHandler(async (req, res) => {
     throw new AppError('Invalid payment signature. Payment verification failed.', 400);
   }
 
-  // Signature is valid: finalize order and commit stock
+  // Signature is valid: finalize order and commit stock atomically
   const updatedOrder = await orderService.finalizeOrderPayment({
     orderId: order._id,
     razorpayPaymentId,
