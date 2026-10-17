@@ -19,7 +19,7 @@ beforeAll(async () => {
   }
 
   await mongoose.connect(uri);
-});
+}, 60000);
 
 afterEach(async () => {
   if (mongoose.connection.readyState === 1) {
@@ -37,4 +37,4 @@ afterAll(async () => {
   if (mongoServer) {
     await mongoServer.stop();
   }
-});
+}, 60000);

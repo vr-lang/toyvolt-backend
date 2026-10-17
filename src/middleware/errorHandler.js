@@ -50,6 +50,12 @@ export const errorHandler = (err, req, res, next) => {
   if (err.name === 'JsonWebTokenError') error = handleJWTError();
   if (err.name === 'TokenExpiredError') error = handleJWTExpiredError();
   if (err.name === 'MulterError') error = handleMulterError(err);
+  if (err.message && err.message.startsWith('CORS policy does not allow access')) {
+    err.statusCode = 403;
+    error.statusCode = 403;
+    error.status = 'fail';
+    error.isOperational = true;
+  }
 
   if (env.NODE_ENV === 'development' || env.NODE_ENV === 'test') {
     logger.error(`${req.method} ${req.originalUrl} - ${err.message}`, err);

@@ -17,8 +17,9 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' }
 }));
 
-// 2. CORS allowlist with credentials
+// 2. Centralized CORS configuration with credentials and preflight
 app.use(corsMiddleware);
+app.options('*', corsMiddleware);
 
 // 3. Request Logging
 if (env.NODE_ENV === 'development') {
