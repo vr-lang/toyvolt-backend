@@ -1,6 +1,10 @@
 import { AppError } from '../utils/AppError.js';
 
 export const requireAdmin = (req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+
   if (!req.user) {
     return next(new AppError('Authentication required.', 401));
   }

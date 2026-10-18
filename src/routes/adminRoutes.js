@@ -53,7 +53,13 @@ import {
   replyReviewSchema
 } from '../validators/reviewValidator.js';
 
-const router = Router();
+// Preflight requests pass without authentication
+router.use((req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 // Protect entire admin namespace: must be authenticated and have role === 'admin'
 router.use(protect, requireAdmin);

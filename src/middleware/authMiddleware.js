@@ -5,6 +5,10 @@ import { asyncHandler } from '../utils/asyncHandler.js';
 import { verifyAccessToken } from '../utils/token.js';
 
 export const protect = asyncHandler(async (req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+
   let token;
 
   // 1. Check cookies first (recommended HTTP-only cookie strategy)
@@ -48,6 +52,10 @@ export const protect = asyncHandler(async (req, res, next) => {
  * Optional authentication: attaches user if token is valid, but does not block if not logged in
  */
 export const optionalAuth = asyncHandler(async (req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    return next();
+  }
+
   let token;
 
   if (req.cookies && req.cookies[env.COOKIE_NAME]) {
