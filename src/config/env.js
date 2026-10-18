@@ -20,9 +20,11 @@ const envSchema = z.object({
         required_error: 'MONGODB_URI is required. Please set your MongoDB Atlas connection string in .env'
       }).min(1, 'MONGODB_URI cannot be empty in .env'),
 
-  // Client URLs
+  // Client URLs & CORS Allowlist
+  ALLOWED_ORIGINS: z.string().optional().default(''),
   FRONTEND_URL: z.string().default('http://localhost:5173'),
   ADMIN_URL: z.string().default('http://localhost:5173'),
+  CLIENT_URL: z.string().optional().default(''),
 
   // Cookies & Auth Tokens
   COOKIE_NAME: z.string().default('toyvolt_access_token'),

@@ -1,6 +1,7 @@
 import { env } from '../config/env.js';
 import { AppError } from '../utils/AppError.js';
 import { logger } from '../utils/logger.js';
+import { isOriginAllowed } from '../config/cors.js';
 
 const handleCastErrorDB = (err) => {
   const message = `Invalid ${err.path}: ${err.value}.`;
@@ -38,6 +39,15 @@ const handleMulterError = (err) => {
 export const errorHandler = (err, req, res, next) => {
   err.statusCode = err.statusCode || 500;
   err.status = err.status || 'error';
+
+  // Ensure CORS headers are present on error responses for permitted origins
+  const origin = req.headers?.origin;
+  if (origin && isOriginAllowed(origin) && !res.getHeader('Access-Control-Allow-Origin')) {
+    const cleanOrigin = origin.trim().replace(/\/+$/, '');
+    res.setHeader('Access-Control-Allow-Origin', cleanOrigin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Vary', 'Origin');
+  }
 
   let error = { ...err };
   error.message = err.message;

@@ -3,25 +3,64 @@ import app from '../../src/app.js';
 import { isOriginAllowed, allowedOrigins } from '../../src/config/cors.js';
 
 describe('CORS Configuration & Origin Validation Tests', () => {
-  test('Explicit allowed origins include storefront (5173), admin (5174), and production domains', () => {
-    expect(allowedOrigins).toContain('http://localhost:5173');
-    expect(allowedOrigins).toContain('http://localhost:5174');
+  test('Explicit allowed origins include production Vercel frontend, custom domain, and admin', () => {
+    expect(allowedOrigins).toContain('https://toyvolt-frontend.vercel.app');
     expect(allowedOrigins).toContain('https://toyvolt.com');
     expect(allowedOrigins).toContain('https://admin.toyvolt.com');
   });
 
-  test('isOriginAllowed helper allows 5173, 5174, production domains, and localhost variants', () => {
+  test('isOriginAllowed helper strictly permits approved origins and blocks wildcards and unapproved domains', () => {
+    expect(isOriginAllowed('https://toyvolt-frontend.vercel.app')).toBe(true);
+    expect(isOriginAllowed('https://toyvolt-frontend.vercel.app/')).toBe(true); // Trailing slash handled
     expect(isOriginAllowed('http://localhost:5173')).toBe(true);
-    expect(isOriginAllowed('http://localhost:5173/')).toBe(true); // Trailing slash handled
     expect(isOriginAllowed('http://localhost:5174')).toBe(true);
-    expect(isOriginAllowed('http://127.0.0.1:5173')).toBe(true);
-    expect(isOriginAllowed('http://127.0.0.1:5174')).toBe(true);
-    expect(isOriginAllowed('http://localhost:3000')).toBe(true);
-    expect(isOriginAllowed('http://localhost:5175')).toBe(true);
     expect(isOriginAllowed('https://toyvolt.com')).toBe(true);
-    expect(isOriginAllowed('https://admin.toyvolt.com')).toBe(true);
-    expect(isOriginAllowed(null)).toBe(true); // Non-browser / curl
+    expect(isOriginAllowed(null)).toBe(true); // Server-to-server / curl
     expect(isOriginAllowed('')).toBe(true);
+
+    // Strictly forbidden: wildcard and malicious origins
+    expect(isOriginAllowed('*')).toBe(false);
+    expect(isOriginAllowed('null')).toBe(false);
+    expect(isOriginAllowed('https://evil-hacker.com')).toBe(false);
+    expect(isOriginAllowed('https://toyvolt-fake.vercel.app')).toBe(false);
+  });
+
+  test('GET /api/v1/health allows production frontend https://toyvolt-frontend.vercel.app with credentials', async () => {
+    const res = await request(app)
+      .get('/api/v1/health')
+      .set('Origin', 'https://toyvolt-frontend.vercel.app');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBe('https://toyvolt-frontend.vercel.app');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    expect(res.headers['access-control-allow-origin']).not.toBe('*');
+  });
+
+  test('GET /api/v1/products allows production frontend https://toyvolt-frontend.vercel.app', async () => {
+    const res = await request(app)
+      .get('/api/v1/products')
+      .set('Origin', 'https://toyvolt-frontend.vercel.app');
+
+    expect(res.status).toBe(200);
+    expect(res.headers['access-control-allow-origin']).toBe('https://toyvolt-frontend.vercel.app');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    expect(res.headers['access-control-allow-origin']).not.toBe('*');
+  });
+
+  test('OPTIONS preflight for production frontend returns 204 with exact origin and credentials', async () => {
+    const res = await request(app)
+      .options('/api/v1/products')
+      .set('Origin', 'https://toyvolt-frontend.vercel.app')
+      .set('Access-Control-Request-Method', 'POST')
+      .set('Access-Control-Request-Headers', 'Content-Type,Authorization');
+
+    expect(res.status).toBe(204);
+    expect(res.headers['access-control-allow-origin']).toBe('https://toyvolt-frontend.vercel.app');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    expect(res.headers['access-control-allow-origin']).not.toBe('*');
+    expect(res.headers['access-control-allow-methods']).toMatch(/POST/);
+    expect(res.headers['access-control-allow-headers']).toMatch(/Content-Type/i);
+    expect(res.headers['access-control-allow-headers']).toMatch(/Authorization/i);
   });
 
   test('GET /api/v1/health allows http://localhost:5173 with credentials and matching origin', async () => {
@@ -45,40 +84,32 @@ describe('CORS Configuration & Origin Validation Tests', () => {
     expect(res.headers['access-control-allow-credentials']).toBe('true');
   });
 
-  test('GET /api/v1/health allows production storefront https://toyvolt.com', async () => {
+  test('Unapproved origin is rejected with 403 and never granted Access-Control-Allow-Origin', async () => {
     const res = await request(app)
       .get('/api/v1/health')
-      .set('Origin', 'https://toyvolt.com');
+      .set('Origin', 'https://unapproved-malicious-origin.com');
 
-    expect(res.status).toBe(200);
-    expect(res.headers['access-control-allow-origin']).toBe('https://toyvolt.com');
-    expect(res.headers['access-control-allow-credentials']).toBe('true');
+    expect(res.status).toBe(403);
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
+    expect(res.body.success).toBe(false);
   });
 
-  test('OPTIONS preflight request for http://localhost:5173 returns 204 with full CORS headers', async () => {
+  test('Wildcard origin "*" is rejected and never returned as Access-Control-Allow-Origin', async () => {
     const res = await request(app)
-      .options('/api/v1/health')
-      .set('Origin', 'http://localhost:5173')
-      .set('Access-Control-Request-Method', 'POST')
-      .set('Access-Control-Request-Headers', 'Content-Type,Authorization');
+      .get('/api/v1/health')
+      .set('Origin', '*');
 
-    expect(res.status).toBe(204);
-    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
-    expect(res.headers['access-control-allow-credentials']).toBe('true');
-    expect(res.headers['access-control-allow-methods']).toMatch(/POST/);
-    expect(res.headers['access-control-allow-headers']).toMatch(/Content-Type/i);
-    expect(res.headers['access-control-allow-headers']).toMatch(/Authorization/i);
+    expect(res.status).toBe(403);
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
-  test('OPTIONS preflight request for deeply nested endpoint (/api/v1/payments/create-order) succeeds', async () => {
+  test('404 error responses for allowed origins preserve exact CORS headers', async () => {
     const res = await request(app)
-      .options('/api/v1/payments/create-order')
-      .set('Origin', 'http://localhost:5173')
-      .set('Access-Control-Request-Method', 'POST')
-      .set('Access-Control-Request-Headers', 'Content-Type,Authorization');
+      .get('/api/v1/non-existent-endpoint-xyz')
+      .set('Origin', 'https://toyvolt-frontend.vercel.app');
 
-    expect(res.status).toBe(204);
-    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+    expect(res.status).toBe(404);
+    expect(res.headers['access-control-allow-origin']).toBe('https://toyvolt-frontend.vercel.app');
     expect(res.headers['access-control-allow-credentials']).toBe('true');
   });
 

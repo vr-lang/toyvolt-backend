@@ -87,6 +87,7 @@ router.patch('/customers/:id/status', updateCustomerStatus);
 router.get('/coupons', getAdminCoupons);
 router.post('/coupons', validate(createCouponSchema), createAdminCoupon);
 router.patch('/coupons/:id', validate(updateCouponSchema), updateAdminCoupon);
+router.put('/coupons/:id', validate(updateCouponSchema), updateAdminCoupon);
 
 // 6. Shipment Management
 router.get('/shipments', getAdminShipments);
