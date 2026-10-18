@@ -85,6 +85,47 @@ class ShiprocketService {
   }
 
   /**
+   * Fetch registered pickup locations from Shiprocket
+   */
+  async getPickupLocations() {
+    if (!hasShiprocket()) {
+      return [{
+        pickup_location: 'work',
+        city: 'Fatehabad',
+        state: 'Haryana',
+        pin_code: '125050',
+        name: 'Primary Hub',
+        is_primary_location: 1
+      }];
+    }
+
+    try {
+      const response = await this.request('GET', '/settings/company/pickup');
+      const list = response?.data?.shipping_address || [];
+      return list;
+    } catch (err) {
+      logger.warn(`Could not fetch Shiprocket pickup locations: ${err.message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Determine primary registered pickup location tag
+   */
+  async getDefaultPickupLocation() {
+    if (env.SHIPROCKET_PICKUP_LOCATION && env.SHIPROCKET_PICKUP_LOCATION !== 'Primary') {
+      return env.SHIPROCKET_PICKUP_LOCATION;
+    }
+    try {
+      const locations = await this.getPickupLocations();
+      const primary = locations.find(l => l.is_primary_location === 1) || locations[0];
+      return primary?.pickup_location || 'work';
+    } catch {
+      return 'work';
+    }
+  }
+
+  /**
    * Create shipment and assign courier for an order
    */
   async createShipmentForOrder(orderId) {
@@ -122,13 +163,14 @@ class ShiprocketService {
 
     const totalWeightKg = Math.max(0.1, Number((totalWeightGrams / 1000).toFixed(2)));
 
-    // 2. Prepare payload for /orders/create/adhoc
+    // 2. Prepare payload for /orders/create/adhoc with dynamic registered pickup location
     const orderDate = new Date(order.createdAt).toISOString().slice(0, 19).replace('T', ' ');
+    const resolvedPickupLocation = await this.getDefaultPickupLocation();
 
     const payload = {
       order_id: order.orderNumber,
       order_date: orderDate,
-      pickup_location: env.SHIPROCKET_PICKUP_LOCATION || 'Primary',
+      pickup_location: resolvedPickupLocation,
       billing_customer_name: order.shippingAddress.fullName,
       billing_last_name: '',
       billing_address: order.shippingAddress.addressLine1,
@@ -181,7 +223,7 @@ class ShiprocketService {
         shiprocketShipmentId,
         awbCode,
         courierName,
-        pickupLocation: env.SHIPROCKET_PICKUP_LOCATION,
+        pickupLocation: resolvedPickupLocation,
         status: awbCode ? 'AWB_ASSIGNED' : 'CREATED',
         trackingUrl: awbCode ? `https://shiprocket.co/tracking/${awbCode}` : null
       });

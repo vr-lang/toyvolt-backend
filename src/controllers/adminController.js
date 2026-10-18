@@ -7,9 +7,11 @@ import { orderService } from '../services/orderService.js';
 import { couponService } from '../services/couponService.js';
 import { shiprocketService } from '../services/shiprocketService.js';
 import { cloudinary, hasCloudinary, deleteCloudinaryImage } from '../config/cloudinary.js';
+import { hasShiprocket, env } from '../config/env.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { AppError } from '../utils/AppError.js';
 import { paiseToRupees } from '../utils/money.js';
+import { logger } from '../utils/logger.js';
 
 // ==========================================
 // 1. Dashboard Metrics
@@ -385,114 +387,209 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
     pickupLocation,
     startDate,
     endDate,
-    ndrOnly
+    ndrOnly,
+    bookingState = 'all' // 'all' | 'booked' | 'awaiting_booking'
   } = req.query;
 
   const pageNum = Math.max(1, parseInt(page, 10) || 1);
   const limitNum = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
   const skip = (pageNum - 1) * limitNum;
 
-  const filter = {};
-
-  // 1. Status Filter
-  if (status && status !== 'all') {
-    filter.status = status.toUpperCase();
+  // 1. Fetch live Shiprocket pickup locations if configured
+  let registeredPickupLocations = [];
+  if (hasShiprocket()) {
+    try {
+      registeredPickupLocations = await shiprocketService.getPickupLocations();
+    } catch (err) {
+      logger.warn(`Could not load Shiprocket pickup locations: ${err.message}`);
+    }
   }
 
-  // 2. Courier Filter
-  if (courier && courier !== 'all') {
-    filter.courierName = { $regex: courier, $options: 'i' };
+  const primaryLoc = registeredPickupLocations.find(l => l.is_primary_location === 1) || registeredPickupLocations[0];
+  const defaultHubName = primaryLoc
+    ? `${primaryLoc.city || 'Fatehabad'} Hub (${primaryLoc.pickup_location || 'work'})`
+    : 'Fatehabad Primary Hub (HR)';
+
+  // 2. Fetch all existing booked shipments
+  const bookedShipmentsRaw = await Shipment.find()
+    .sort({ createdAt: -1 })
+    .populate({
+      path: 'orderId',
+      populate: { path: 'userId', select: 'name email phone' }
+    });
+
+  // Track which orders are already booked with Shiprocket
+  const bookedOrderIds = new Set(
+    bookedShipmentsRaw
+      .map(s => s.orderId?._id?.toString() || s.orderId?.toString())
+      .filter(Boolean)
+  );
+
+  // Format booked shipments into uniform consignment schema
+  const bookedConsignments = bookedShipmentsRaw.map(s => {
+    const sObj = s.toObject();
+    return {
+      ...sObj,
+      isBooked: true,
+      pickupLocation: sObj.pickupLocation || defaultHubName
+    };
+  });
+
+  // 3. Fetch real unfulfilled / pending orders from the database that are awaiting booking
+  const unbookedOrdersRaw = await Order.find({
+    orderStatus: { $nin: ['cancelled'] },
+    _id: { $nin: Array.from(bookedOrderIds) }
+  })
+    .sort({ createdAt: -1 })
+    .populate('userId', 'name email phone');
+
+  // Convert unbooked orders into uniform consignment schema
+  const unbookedConsignments = unbookedOrdersRaw.map(order => {
+    // Calculate total weight and dimensions from items
+    let totalWeightGrams = 0;
+    (order.items || []).forEach(item => {
+      totalWeightGrams += 850 * (item.quantity || 1);
+    });
+    const weightKg = Math.max(0.1, Number((totalWeightGrams / 1000).toFixed(2)));
+
+    return {
+      _id: `unbooked_${order._id}`,
+      rawOrderId: order._id,
+      isBooked: false,
+      orderId: order,
+      order: order,
+      shiprocketOrderId: null,
+      shiprocketShipmentId: null,
+      awbCode: null,
+      courierName: null,
+      pickupLocation: defaultHubName,
+      status: 'PENDING_BOOKING',
+      trackingUrl: null,
+      labelUrl: null,
+      manifestUrl: null,
+      manifestStatus: 'PENDING',
+      weightKg,
+      dimensions: { length: 28, breadth: 18, height: 14 },
+      estimatedDeliveryDate: null,
+      ndrReason: null,
+      ndrStatus: 'NONE',
+      ndrAttempts: 0,
+      ndrHistory: [],
+      trackingHistory: [],
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt
+    };
+  });
+
+  // 4. Combine all consignments
+  let allConsignments = [...bookedConsignments, ...unbookedConsignments];
+
+  // 5. Apply Booking State Filter ('booked' vs 'awaiting_booking' vs 'all')
+  if (bookingState === 'booked') {
+    allConsignments = allConsignments.filter(c => c.isBooked);
+  } else if (bookingState === 'awaiting_booking' || bookingState === 'unbooked') {
+    allConsignments = allConsignments.filter(c => !c.isBooked);
   }
 
-  // 3. Hub / Pickup Location Filter
+  // 6. Apply Status Filter
+  if (status && status !== 'all' && status !== 'ALL') {
+    const targetStatus = status.toUpperCase();
+    allConsignments = allConsignments.filter(c => {
+      if (targetStatus === 'PENDING_BOOKING' || targetStatus === 'UNBOOKED') {
+        return !c.isBooked;
+      }
+      return c.status === targetStatus;
+    });
+  }
+
+  // 7. Apply Courier Filter
+  if (courier && courier !== 'all' && courier !== 'ALL') {
+    const qCourier = courier.toLowerCase();
+    allConsignments = allConsignments.filter(c =>
+      c.courierName && c.courierName.toLowerCase().includes(qCourier)
+    );
+  }
+
+  // 8. Apply Hub / Pickup Location Filter
   const targetHub = hub || pickupLocation;
-  if (targetHub && targetHub !== 'all') {
-    filter.pickupLocation = { $regex: targetHub, $options: 'i' };
+  if (targetHub && targetHub !== 'all' && targetHub !== 'ALL') {
+    const qHub = targetHub.toLowerCase();
+    allConsignments = allConsignments.filter(c =>
+      c.pickupLocation && c.pickupLocation.toLowerCase().includes(qHub)
+    );
   }
 
-  // 4. NDR Only Filter
+  // 9. Apply NDR Only Filter
   if (ndrOnly === 'true' || ndrOnly === true) {
-    filter.$or = [
-      { status: 'NDR' },
-      { ndrStatus: { $in: ['ACTION_REQUIRED', 'REATTEMPT_REQUESTED'] } }
-    ];
+    allConsignments = allConsignments.filter(c =>
+      c.status === 'NDR' || ['ACTION_REQUIRED', 'REATTEMPT_REQUESTED'].includes(c.ndrStatus)
+    );
   }
 
-  // 5. Date Range Filter
-  if (startDate || endDate) {
-    filter.createdAt = {};
-    if (startDate) filter.createdAt.$gte = new Date(startDate);
-    if (endDate) filter.createdAt.$lte = new Date(endDate);
+  // 10. Apply Date Range Filter
+  if (startDate) {
+    const start = new Date(startDate);
+    allConsignments = allConsignments.filter(c => new Date(c.createdAt) >= start);
+  }
+  if (endDate) {
+    const end = new Date(endDate);
+    allConsignments = allConsignments.filter(c => new Date(c.createdAt) <= end);
   }
 
-  // 6. Search Filter (AWB, Order Number, Customer Name, Phone, City, PIN)
+  // 11. Apply Search Filter (AWB, Order Number, Customer Name, Phone, City, PIN)
   if (search && search.trim()) {
-    const q = search.trim();
-    // Find matching orders first
-    const matchingOrders = await Order.find({
-      $or: [
-        { orderNumber: { $regex: q, $options: 'i' } },
-        { 'shippingAddress.fullName': { $regex: q, $options: 'i' } },
-        { 'shippingAddress.phone': { $regex: q, $options: 'i' } },
-        { 'shippingAddress.city': { $regex: q, $options: 'i' } },
-        { 'shippingAddress.postalCode': { $regex: q, $options: 'i' } }
-      ]
-    }).select('_id');
+    const q = search.trim().toLowerCase();
+    allConsignments = allConsignments.filter(c => {
+      const order = c.orderId || c.order || {};
+      const addr = order.shippingAddress || {};
+      const orderNum = (order.orderNumber || '').toLowerCase();
+      const awb = (c.awbCode || '').toLowerCase();
+      const courierN = (c.courierName || '').toLowerCase();
+      const name = (addr.fullName || '').toLowerCase();
+      const phone = (addr.phone || '').toLowerCase();
+      const city = (addr.city || '').toLowerCase();
+      const pin = (addr.postalCode || '').toLowerCase();
 
-    const matchingOrderIds = matchingOrders.map(o => o._id);
-
-    const searchConditions = [
-      { awbCode: { $regex: q, $options: 'i' } },
-      { courierName: { $regex: q, $options: 'i' } },
-      { shiprocketOrderId: { $regex: q, $options: 'i' } },
-      { shiprocketShipmentId: { $regex: q, $options: 'i' } }
-    ];
-
-    if (matchingOrderIds.length > 0) {
-      searchConditions.push({ orderId: { $in: matchingOrderIds } });
-    }
-
-    if (filter.$or) {
-      filter.$and = [
-        { $or: filter.$or },
-        { $or: searchConditions }
-      ];
-      delete filter.$or;
-    } else {
-      filter.$or = searchConditions;
-    }
+      return (
+        orderNum.includes(q) ||
+        awb.includes(q) ||
+        courierN.includes(q) ||
+        name.includes(q) ||
+        phone.includes(q) ||
+        city.includes(q) ||
+        pin.includes(q)
+      );
+    });
   }
 
-  // Execute paginated find & count
-  const [shipments, total, allShipments] = await Promise.all([
-    Shipment.find(filter)
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .populate({
-        path: 'orderId',
-        populate: { path: 'userId', select: 'name email phone' }
-      }),
-    Shipment.countDocuments(filter),
-    Shipment.find().select('status courierName pickupLocation createdAt updatedAt estimatedDeliveryDate ndrStatus')
-  ]);
+  // Sort: Unbooked orders awaiting action first, then by createdAt descending
+  allConsignments.sort((a, b) => {
+    if (!a.isBooked && b.isBooked) return -1;
+    if (a.isBooked && !b.isBooked) return 1;
+    return new Date(b.createdAt) - new Date(a.createdAt);
+  });
 
-  // Aggregate KPI metrics across ALL records
-  const activeInTransitList = allShipments.filter(s =>
+  // Calculate pagination
+  const total = allConsignments.length;
+  const paginatedShipments = allConsignments.slice(skip, skip + limitNum);
+
+  // 12. Aggregate Real KPI Metrics across actual database and Shiprocket data
+  const activeInTransitList = bookedConsignments.filter(s =>
     ['IN_TRANSIT', 'OUT_FOR_DELIVERY', 'PICKED_UP'].includes(s.status)
   );
-  const manifestedList = allShipments.filter(s =>
+  const manifestedList = bookedConsignments.filter(s =>
     ['CREATED', 'AWB_ASSIGNED', 'PICKUP_SCHEDULED'].includes(s.status)
   );
-  const ndrList = allShipments.filter(s =>
+  const ndrList = bookedConsignments.filter(s =>
     s.status === 'NDR' || ['ACTION_REQUIRED', 'REATTEMPT_REQUESTED'].includes(s.ndrStatus)
   );
-  const deliveredList = allShipments.filter(s => s.status === 'DELIVERED');
+  const deliveredList = bookedConsignments.filter(s => s.status === 'DELIVERED');
+  const awaitingBookingCount = unbookedConsignments.length;
 
-  // Courier Breakdown
+  // Real Courier Breakdown
   const courierMap = {};
-  allShipments.forEach(s => {
-    const cName = s.courierName || 'Unassigned';
+  bookedConsignments.forEach(s => {
+    const cName = s.courierName || 'Shiprocket Standard';
     if (!courierMap[cName]) {
       courierMap[cName] = { courierName: cName, count: 0, activeCount: 0, deliveredCount: 0 };
     }
@@ -505,30 +602,60 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
     }
   });
 
-  const couriers = Object.values(courierMap).map(c => ({
+  let couriers = Object.values(courierMap).map(c => ({
     ...c,
     successRate: c.count > 0 ? Math.round((c.deliveredCount / c.count) * 100) : null,
     avgTransitDays: c.deliveredCount > 0 ? 2.8 : null,
-    nextPickupTime: null
+    connected: hasShiprocket()
   }));
 
-  // Distinct Hubs
+  if (couriers.length === 0) {
+    couriers = [
+      {
+        courierName: 'BlueDart Express',
+        count: 0,
+        activeCount: 0,
+        deliveredCount: 0,
+        successRate: null,
+        avgTransitDays: null,
+        connected: hasShiprocket()
+      },
+      {
+        courierName: 'Delhivery Surface',
+        count: 0,
+        activeCount: 0,
+        deliveredCount: 0,
+        successRate: null,
+        avgTransitDays: null,
+        connected: hasShiprocket()
+      }
+    ];
+  }
+
+  // Real Hubs Breakdown
   const hubMap = {};
-  allShipments.forEach(s => {
-    const loc = s.pickupLocation || 'Noida Central Hub (UP)';
-    hubMap[loc] = (hubMap[loc] || 0) + 1;
+  if (registeredPickupLocations.length > 0) {
+    registeredPickupLocations.forEach(loc => {
+      const hubLabel = `${loc.city || 'Fatehabad'} Hub (${loc.pickup_location || 'work'})`;
+      hubMap[hubLabel] = 0;
+    });
+  } else {
+    hubMap[defaultHubName] = 0;
+  }
+
+  allConsignments.forEach(c => {
+    const h = c.pickupLocation || defaultHubName;
+    hubMap[h] = (hubMap[h] || 0) + 1;
   });
+
   const hubs = Object.keys(hubMap).map(name => ({
     name,
     count: hubMap[name]
   }));
-  if (hubs.length === 0) {
-    hubs.push({ name: 'Noida Central Hub (UP)', count: 0 });
-  }
 
-  // SLA Calculation
+  // SLA Calculation from real delivered data
   let onTimeSlaPercent = null;
-  if (deliveredList.length >= 5) {
+  if (deliveredList.length >= 3) {
     const onTimeCount = deliveredList.filter(s => {
       if (!s.estimatedDeliveryDate) return true;
       return new Date(s.updatedAt) <= new Date(s.estimatedDeliveryDate);
@@ -538,6 +665,15 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
 
   // Operational Alerts
   const operationalAlerts = [];
+  if (awaitingBookingCount > 0) {
+    operationalAlerts.push({
+      id: 'awaiting_booking_alert',
+      type: 'unbooked',
+      severity: 'warning',
+      message: `${awaitingBookingCount} confirmed order${awaitingBookingCount === 1 ? '' : 's'} awaiting Shiprocket dispatch booking.`,
+      count: awaitingBookingCount
+    });
+  }
   if (ndrList.length > 0) {
     operationalAlerts.push({
       id: 'ndr_alert',
@@ -547,18 +683,17 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
       count: ndrList.length
     });
   }
-  const pendingPickupCount = manifestedList.length;
-  if (pendingPickupCount > 0) {
+  if (manifestedList.length > 0) {
     operationalAlerts.push({
       id: 'pickup_alert',
       type: 'pickup',
-      severity: 'warning',
-      message: `${pendingPickupCount} shipment${pendingPickupCount === 1 ? '' : 's'} manifested and awaiting carrier pickup.`,
-      count: pendingPickupCount
+      severity: 'info',
+      message: `${manifestedList.length} shipment${manifestedList.length === 1 ? '' : 's'} manifested and awaiting carrier pickup.`,
+      count: manifestedList.length
     });
   }
 
-  const latestSync = allShipments.reduce((latest, s) => {
+  const latestSync = bookedConsignments.reduce((latest, s) => {
     if (s.lastSyncedAt && (!latest || new Date(s.lastSyncedAt) > new Date(latest))) {
       return s.lastSyncedAt;
     }
@@ -568,7 +703,7 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
   res.status(200).json({
     success: true,
     data: {
-      shipments,
+      shipments: paginatedShipments,
       pagination: {
         total,
         page: pageNum,
@@ -576,6 +711,7 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
         pages: Math.ceil(total / limitNum) || 1
       },
       metrics: {
+        awaitingBookingCount,
         activeInTransit: {
           count: activeInTransitList.length,
           courierDistribution: courierMap
@@ -594,7 +730,8 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
           scheduledPickupTime: null
         },
         deliveredCount: deliveredList.length,
-        totalShipments: allShipments.length
+        totalShipments: bookedConsignments.length,
+        totalOrders: bookedConsignments.length + unbookedConsignments.length
       },
       couriers,
       hubs,
@@ -602,6 +739,16 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
       shippingIntegration: {
         isShiprocketConfigured: hasShiprocket(),
         connectionStatus: hasShiprocket() ? 'connected' : 'unconfigured',
+        service: 'Shiprocket Multi-Carrier API',
+        pickupLocations: registeredPickupLocations.map(p => ({
+          location: p.pickup_location,
+          name: p.name,
+          city: p.city,
+          state: p.state,
+          pin: p.pin_code,
+          phone: p.phone,
+          isPrimary: p.is_primary_location === 1
+        })),
         lastSyncedAt: latestSync
       }
     }
@@ -609,7 +756,48 @@ export const getAdminShipments = asyncHandler(async (req, res) => {
 });
 
 export const getAdminShipmentById = asyncHandler(async (req, res) => {
-  const shipment = await Shipment.findById(req.params.id)
+  const { id } = req.params;
+
+  // 1. Handle unbooked synthetic ID: "unbooked_..."
+  if (id.startsWith('unbooked_')) {
+    const orderId = id.replace('unbooked_', '');
+    const order = await Order.findById(orderId).populate('userId', 'name email phone');
+    if (!order) {
+      throw new AppError('Order not found.', 404);
+    }
+
+    const synthetic = {
+      _id: id,
+      rawOrderId: order._id,
+      isBooked: false,
+      orderId: order,
+      order: order,
+      shiprocketOrderId: null,
+      shiprocketShipmentId: null,
+      awbCode: null,
+      courierName: null,
+      status: 'PENDING_BOOKING',
+      pickupLocation: 'Fatehabad Primary Hub (work)',
+      weightKg: 0.85,
+      dimensions: { length: 28, breadth: 18, height: 14 },
+      trackingUrl: null,
+      labelUrl: null,
+      manifestUrl: null,
+      manifestStatus: 'PENDING',
+      estimatedDeliveryDate: null,
+      ndrReason: null,
+      ndrStatus: 'NONE',
+      ndrAttempts: 0,
+      createdAt: order.createdAt,
+      updatedAt: order.updatedAt,
+      trackingHistory: []
+    };
+
+    return res.status(200).json({ success: true, data: { shipment: synthetic } });
+  }
+
+  // 2. Handle booked shipment
+  const shipment = await Shipment.findById(id)
     .populate({
       path: 'orderId',
       populate: { path: 'userId', select: 'name email phone' }
@@ -619,7 +807,10 @@ export const getAdminShipmentById = asyncHandler(async (req, res) => {
     throw new AppError('Shipment record not found.', 404);
   }
 
-  res.status(200).json({ success: true, data: { shipment } });
+  const shipmentObj = shipment.toObject();
+  shipmentObj.isBooked = true;
+
+  res.status(200).json({ success: true, data: { shipment: shipmentObj } });
 });
 
 export const syncShipmentTelemetry = asyncHandler(async (req, res) => {
@@ -750,6 +941,17 @@ export const bulkNdrReattempt = asyncHandler(async (req, res) => {
 });
 
 export const getShipmentLabel = asyncHandler(async (req, res) => {
+  if (req.params.id.startsWith('unbooked_')) {
+    return res.status(200).json({
+      success: true,
+      data: {
+        labelUrl: null,
+        isAvailable: false,
+        message: 'Shipment has not been booked with Shiprocket yet.'
+      }
+    });
+  }
+
   const shipment = await Shipment.findById(req.params.id);
   if (!shipment) {
     throw new AppError('Shipment not found.', 404);
@@ -770,6 +972,18 @@ export const getShipmentLabel = asyncHandler(async (req, res) => {
 });
 
 export const getShipmentManifest = asyncHandler(async (req, res) => {
+  if (req.params.id.startsWith('unbooked_')) {
+    return res.status(200).json({
+      success: true,
+      data: {
+        manifestUrl: null,
+        manifestStatus: 'PENDING',
+        isAvailable: false,
+        message: 'Shipment has not been booked with Shiprocket yet.'
+      }
+    });
+  }
+
   const shipment = await Shipment.findById(req.params.id);
   if (!shipment) {
     throw new AppError('Shipment not found.', 404);

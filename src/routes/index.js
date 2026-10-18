@@ -8,6 +8,7 @@ import orderRoutes from './orderRoutes.js';
 import paymentRoutes from './paymentRoutes.js';
 import shipmentRoutes from './shipmentRoutes.js';
 import adminRoutes from './adminRoutes.js';
+import reviewRoutes from './reviewRoutes.js';
 import { handleRazorpayWebhook } from '../controllers/paymentController.js';
 import { handleShiprocketWebhook } from '../controllers/shipmentController.js';
 import { getSetupStatus, setupInitialAdmin } from '../controllers/authController.js';
@@ -33,6 +34,7 @@ router.use('/orders', orderRoutes);
 router.use('/payments', paymentRoutes);
 router.use('/shipments', shipmentRoutes);
 router.use('/admin', adminRoutes);
+router.use('/reviews', reviewRoutes);
 
 // Canonical Webhook routes
 router.post('/webhooks/razorpay', handleRazorpayWebhook);

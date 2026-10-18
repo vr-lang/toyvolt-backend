@@ -42,6 +42,16 @@ import {
   createCouponSchema,
   updateCouponSchema
 } from '../validators/couponValidator.js';
+import {
+  getAdminReviews,
+  updateAdminReviewStatus,
+  replyAdminReview,
+  deleteAdminReview
+} from '../controllers/reviewController.js';
+import {
+  updateReviewStatusSchema,
+  replyReviewSchema
+} from '../validators/reviewValidator.js';
 
 const router = Router();
 
@@ -83,10 +93,16 @@ router.get('/shipments', getAdminShipments);
 router.post('/shipments/sync', syncShipmentTelemetry);
 router.post('/shipments/bulk/ndr-reattempt', bulkNdrReattempt);
 router.post('/shipments/:orderId/create', createAdminShipment);
+router.get('/shipments/order/:orderId', getAdminShipmentByOrderId);
 router.get('/shipments/:id', getAdminShipmentById);
 router.get('/shipments/:id/label', getShipmentLabel);
 router.get('/shipments/:id/manifest', getShipmentManifest);
 router.post('/shipments/:id/ndr/resolve', resolveShipmentNdr);
-router.get('/shipments/order/:orderId', getAdminShipmentByOrderId);
+
+// 7. Review Moderation
+router.get('/reviews', getAdminReviews);
+router.patch('/reviews/:id/status', validate(updateReviewStatusSchema), updateAdminReviewStatus);
+router.post('/reviews/:id/reply', validate(replyReviewSchema), replyAdminReview);
+router.delete('/reviews/:id', deleteAdminReview);
 
 export default router;

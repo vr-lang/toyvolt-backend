@@ -139,4 +139,37 @@ describe('Shiprocket Logistics & Tracking Integration Tests', () => {
     expect(res.body.data.shipment.awbCode).toBe('MOCK_AWB_987');
     expect(res.body.data.shipment.courierName).toBe('Delhivery');
   });
+
+  test('GET /api/v1/admin/shipments returns both booked shipments and unbooked orders', async () => {
+    // 1. Book one shipment
+    await Shipment.create({
+      orderId: paidOrder._id,
+      shiprocketOrderId: 'SR_TEST_123',
+      awbCode: 'MOCK_AWB_123',
+      courierName: 'BlueDart Express',
+      status: 'IN_TRANSIT'
+    });
+
+    // 2. Fetch admin shipments
+    const res = await request(app)
+      .get('/api/v1/admin/shipments')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    // Should have both the booked shipment and the unpaidOrder which is awaiting booking
+    expect(res.body.data.shipments.length).toBeGreaterThanOrEqual(2);
+    expect(res.body.data.metrics.awaitingBookingCount).toBeGreaterThanOrEqual(1);
+    expect(res.body.data.metrics.activeInTransit.count).toBe(1);
+
+    const booked = res.body.data.shipments.find(s => s.isBooked === true);
+    const unbooked = res.body.data.shipments.find(s => s.isBooked === false);
+
+    expect(booked).toBeDefined();
+    expect(booked.awbCode).toBe('MOCK_AWB_123');
+
+    expect(unbooked).toBeDefined();
+    expect(unbooked.status).toBe('PENDING_BOOKING');
+    expect(unbooked.awbCode).toBeNull();
+  });
 });
