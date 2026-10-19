@@ -53,6 +53,8 @@ import {
   replyReviewSchema
 } from '../validators/reviewValidator.js';
 
+const router = Router();
+
 // Preflight requests pass without authentication
 router.use((req, res, next) => {
   if (req.method === 'OPTIONS') {
