@@ -29,6 +29,10 @@ import {
   getSalesAnalytics,
   getAnalyticsOverview
 } from '../controllers/adminController.js';
+import {
+  getShippingSettings,
+  updateShippingSettings
+} from '../controllers/shipmentController.js';
 import { protect } from '../middleware/authMiddleware.js';
 import { requireAdmin } from '../middleware/adminMiddleware.js';
 import { validate } from '../middleware/validate.js';
@@ -93,6 +97,9 @@ router.put('/coupons/:id', validate(updateCouponSchema), updateAdminCoupon);
 
 // 6. Shipment Management
 router.get('/shipments', getAdminShipments);
+router.get('/shipments/settings', getShippingSettings);
+router.patch('/shipments/settings', updateShippingSettings);
+router.put('/shipments/settings', updateShippingSettings);
 router.post('/shipments/sync', syncShipmentTelemetry);
 router.post('/shipments/bulk/ndr-reattempt', bulkNdrReattempt);
 router.post('/shipments/:orderId/create', createAdminShipment);

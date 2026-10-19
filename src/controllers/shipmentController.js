@@ -1,5 +1,6 @@
 import { Order } from '../models/Order.js';
 import { Shipment } from '../models/Shipment.js';
+import { ShippingSetting } from '../models/ShippingSetting.js';
 import { shiprocketService } from '../services/shiprocketService.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { AppError } from '../utils/AppError.js';
@@ -96,3 +97,63 @@ export const handleShiprocketWebhook = asyncHandler(async (req, res) => {
 
   res.status(200).json({ status: 'ok' });
 });
+
+export const getShippingSettings = asyncHandler(async (req, res) => {
+  let settings = await ShippingSetting.findOne().sort({ createdAt: -1 });
+  if (!settings) {
+    settings = await ShippingSetting.create({
+      isShippingFeeEnabled: false,
+      standardShippingFeeRupees: 0,
+      standardShippingFeePaise: 0,
+      freeShippingThresholdRupees: 0,
+      freeShippingThresholdPaise: 0,
+      description: 'Free shipping on all orders across India'
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    data: { settings }
+  });
+});
+
+export const updateShippingSettings = asyncHandler(async (req, res) => {
+  const {
+    isShippingFeeEnabled,
+    standardShippingFeeRupees = 0,
+    freeShippingThresholdRupees = 0,
+    description
+  } = req.body;
+
+  const feeRupees = Math.max(0, Number(standardShippingFeeRupees) || 0);
+  const thresholdRupees = Math.max(0, Number(freeShippingThresholdRupees) || 0);
+  const isEnabled = Boolean(isShippingFeeEnabled) && feeRupees > 0;
+
+  let settings = await ShippingSetting.findOne().sort({ createdAt: -1 });
+  if (!settings) {
+    settings = new ShippingSetting();
+  }
+
+  settings.isShippingFeeEnabled = isEnabled;
+  settings.standardShippingFeeRupees = isEnabled ? feeRupees : 0;
+  settings.standardShippingFeePaise = isEnabled ? feeRupees * 100 : 0;
+  settings.freeShippingThresholdRupees = isEnabled ? thresholdRupees : 0;
+  settings.freeShippingThresholdPaise = isEnabled ? thresholdRupees * 100 : 0;
+  if (description) settings.description = description;
+  if (req.user?._id) settings.updatedBy = req.user._id;
+
+  await settings.save();
+
+  logger.info(
+    `Shipping settings updated: enabled=${settings.isShippingFeeEnabled}, fee=₹${settings.standardShippingFeeRupees}, threshold=₹${settings.freeShippingThresholdRupees}`
+  );
+
+  res.status(200).json({
+    success: true,
+    message: settings.isShippingFeeEnabled
+      ? `Shipping fee set to ₹${settings.standardShippingFeeRupees} (Free over ₹${settings.freeShippingThresholdRupees})`
+      : 'Shipping fee removed. 100% Free Shipping enabled across all orders.',
+    data: { settings }
+  });
+});
+

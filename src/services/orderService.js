@@ -2,14 +2,12 @@ import { Order } from '../models/Order.js';
 import { Product } from '../models/Product.js';
 import { Cart } from '../models/Cart.js';
 import { Payment } from '../models/Payment.js';
+import { ShippingSetting } from '../models/ShippingSetting.js';
 import { couponService } from './couponService.js';
 import { cartService } from './cartService.js';
 import { emailService } from './emailService.js';
 import { AppError } from '../utils/AppError.js';
 import { logger } from '../utils/logger.js';
-
-const FREE_SHIPPING_THRESHOLD_PAISE = 99900; // ₹999
-const STANDARD_SHIPPING_FEE_PAISE = 9900;    // ₹99
 
 class OrderService {
   /**
@@ -103,8 +101,21 @@ class OrderService {
         appliedCouponCode = couponValidation.coupon.code;
       }
 
-      // 4. Calculate Shipping Fee
-      const shippingFeePaise = subtotalPaise >= FREE_SHIPPING_THRESHOLD_PAISE ? 0 : STANDARD_SHIPPING_FEE_PAISE;
+      // 4. Calculate Shipping Fee dynamically (defaults to ₹0 Free Shipping)
+      let shippingFeePaise = 0;
+      try {
+        const shippingConfig = await ShippingSetting.findOne().sort({ createdAt: -1 });
+        if (shippingConfig && shippingConfig.isShippingFeeEnabled && shippingConfig.standardShippingFeePaise > 0) {
+          if (shippingConfig.freeShippingThresholdPaise > 0 && subtotalPaise >= shippingConfig.freeShippingThresholdPaise) {
+            shippingFeePaise = 0;
+          } else {
+            shippingFeePaise = shippingConfig.standardShippingFeePaise;
+          }
+        }
+      } catch (settingErr) {
+        logger.warn(`Could not fetch dynamic shipping setting, defaulting to free shipping: ${settingErr.message}`);
+        shippingFeePaise = 0;
+      }
 
       // 5. Calculate Final Payable Amount
       const finalAmountPaise = Math.max(0, subtotalPaise - discountAmountPaise + shippingFeePaise);
