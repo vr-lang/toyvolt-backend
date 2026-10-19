@@ -10,7 +10,11 @@ beforeAll(async () => {
   process.env.RAZORPAY_KEY_SECRET = 'test_razorpay_secret';
   process.env.RAZORPAY_WEBHOOK_SECRET = 'test_webhook_secret';
 
-  mongoServer = await MongoMemoryServer.create();
+  mongoServer = await MongoMemoryServer.create({
+    binary: {
+      version: '7.0.24'
+    }
+  });
   const uri = mongoServer.getUri();
   process.env.TEST_MONGO_URI = uri;
 

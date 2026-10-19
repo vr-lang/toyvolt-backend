@@ -12,14 +12,20 @@ export const parseOrigins = (val) => {
     .filter(Boolean);
 };
 
-// 1. Mandatory production origins that are always explicitly permitted
+// 1. Mandatory production and local origins that are always explicitly permitted
 const productionOrigins = [
   'https://toyvolt-admin-3v2d.vercel.app',
   'https://toyvolt-admin.vercel.app',
   'https://toyvolt-frontend.vercel.app',
   'https://toyvolt.com',
   'https://www.toyvolt.com',
-  'https://admin.toyvolt.com'
+  'https://admin.toyvolt.com',
+  'http://localhost:5174',
+  'http://127.0.0.1:5174',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000'
 ];
 
 // 2. Dynamic origins from environment configuration
@@ -30,15 +36,15 @@ const configuredOrigins = [
   ...parseOrigins(env.CLIENT_URL)
 ];
 
-// 3. Local development origins (included only in non-production environments)
-const developmentOrigins = env.NODE_ENV !== 'production' ? [
+// 3. Local development origins
+const developmentOrigins = [
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:5174',
   'http://127.0.0.1:5174',
   'http://localhost:3000',
   'http://127.0.0.1:3000'
-] : [];
+];
 
 export const allowedOrigins = Array.from(
   new Set([...productionOrigins, ...configuredOrigins, ...developmentOrigins])
@@ -47,7 +53,7 @@ const allowedOriginsSet = new Set(allowedOrigins.map((o) => o.toLowerCase()));
 
 /**
  * Checks whether an incoming origin is permitted.
- * Supports exact allowlist matches, Toyvolt Vercel deployments, localhost in non-production, and non-browser calls.
+ * Supports exact allowlist matches, Toyvolt Vercel deployments, localhost, and non-browser calls.
  * Never allows wildcard '*' when credentials mode is enabled.
  */
 export const isOriginAllowed = (origin) => {
@@ -66,17 +72,15 @@ export const isOriginAllowed = (origin) => {
   }
 
   // 2. Check Toyvolt Vercel deployment patterns (e.g. toyvolt-admin-*.vercel.app, toyvolt-frontend-*.vercel.app)
-  const isToyvoltVercel = /^https:\/\/(toyvolt-[a-z0-9-]+|toyvolt)\.vercel\.app$/i.test(cleanOrigin);
+  const isToyvoltVercel = /^https:\/\/(toyvolt-frontend(-[a-z0-9]+)*|toyvolt-admin(-[a-z0-9]+)*|toyvolt)\.vercel\.app$/i.test(cleanOrigin);
   if (isToyvoltVercel) {
     return true;
   }
 
-  // 3. Allow localhost / 127.0.0.1 on any port only in non-production environments
-  if (env.NODE_ENV !== 'production') {
-    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(cleanOrigin);
-    if (isLocalhost) {
-      return true;
-    }
+  // 3. Allow localhost / 127.0.0.1 on any port
+  const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(cleanOrigin);
+  if (isLocalhost) {
+    return true;
   }
 
   return false;
