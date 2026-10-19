@@ -78,10 +78,12 @@ router.get('/orders', getAdminOrders);
 router.post('/orders', createAdminOrder);
 router.get('/orders/:id', getAdminOrderById);
 router.patch('/orders/:id/status', validate(updateOrderStatusSchema), updateOrderStatus);
+router.put('/orders/:id/status', validate(updateOrderStatusSchema), updateOrderStatus);
 
 // 4. Customer Management
 router.get('/customers', getAdminCustomers);
 router.patch('/customers/:id/status', updateCustomerStatus);
+router.put('/customers/:id/status', updateCustomerStatus);
 
 // 5. Coupon Management
 router.get('/coupons', getAdminCoupons);
@@ -103,6 +105,7 @@ router.post('/shipments/:id/ndr/resolve', resolveShipmentNdr);
 // 7. Review Moderation
 router.get('/reviews', getAdminReviews);
 router.patch('/reviews/:id/status', validate(updateReviewStatusSchema), updateAdminReviewStatus);
+router.put('/reviews/:id/status', validate(updateReviewStatusSchema), updateAdminReviewStatus);
 router.post('/reviews/:id/reply', validate(replyReviewSchema), replyAdminReview);
 router.delete('/reviews/:id', deleteAdminReview);
 

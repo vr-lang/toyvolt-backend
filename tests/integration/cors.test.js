@@ -100,6 +100,33 @@ describe('CORS Configuration & Origin Validation Tests', () => {
     expect(res.headers['access-control-allow-headers']).toMatch(/content-type/i);
   });
 
+  test('OPTIONS preflight for /api/v1/admin/customers/:id/status allows PATCH and PUT from https://toyvolt-admin-3v2d.vercel.app', async () => {
+    // 1. Test PATCH preflight
+    const patchRes = await request(app)
+      .options('/api/v1/admin/customers/6ad3600ca347efbbc6f43161/status')
+      .set('Origin', 'https://toyvolt-admin-3v2d.vercel.app')
+      .set('Access-Control-Request-Method', 'PATCH')
+      .set('Access-Control-Request-Headers', 'authorization,content-type');
+
+    expect(patchRes.status).toBe(204);
+    expect(patchRes.headers['access-control-allow-origin']).toBe('https://toyvolt-admin-3v2d.vercel.app');
+    expect(patchRes.headers['access-control-allow-credentials']).toBe('true');
+    expect(patchRes.headers['access-control-allow-methods']).toMatch(/PATCH/);
+    expect(patchRes.headers['access-control-allow-methods']).toMatch(/PUT/);
+
+    // 2. Test PUT preflight
+    const putRes = await request(app)
+      .options('/api/v1/admin/customers/6ad3600ca347efbbc6f43161/status')
+      .set('Origin', 'https://toyvolt-admin-3v2d.vercel.app')
+      .set('Access-Control-Request-Method', 'PUT')
+      .set('Access-Control-Request-Headers', 'authorization,content-type');
+
+    expect(putRes.status).toBe(204);
+    expect(putRes.headers['access-control-allow-origin']).toBe('https://toyvolt-admin-3v2d.vercel.app');
+    expect(putRes.headers['access-control-allow-credentials']).toBe('true');
+    expect(putRes.headers['access-control-allow-methods']).toMatch(/PUT/);
+  });
+
 
   test('GET /api/v1/health allows http://localhost:5173 with credentials and matching origin', async () => {
     const res = await request(app)

@@ -20,6 +20,7 @@ router.use(protect);
 router.get('/', getCart);
 router.post('/items', validate(addToCartSchema), addToCart);
 router.patch('/items/:productId', validate(updateCartItemSchema), updateCartItem);
+router.put('/items/:productId', validate(updateCartItemSchema), updateCartItem);
 router.delete('/items/:productId', removeCartItem);
 router.delete('/', clearCart);
 

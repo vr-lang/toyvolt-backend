@@ -121,7 +121,7 @@ export const corsOptions = {
   ],
   exposedHeaders: ['Set-Cookie'],
   optionsSuccessStatus: 204,
-  maxAge: 86400
+  maxAge: 600
 };
 
 export const corsMiddleware = cors(corsOptions);
