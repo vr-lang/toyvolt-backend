@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { jest } from '@jest/globals';
 import app from '../../src/app.js';
 import { User } from '../../src/models/User.js';
 import { Product } from '../../src/models/Product.js';
@@ -7,6 +8,7 @@ import { Shipment } from '../../src/models/Shipment.js';
 import { generateAccessToken } from '../../src/utils/token.js';
 
 describe('Shiprocket Logistics & Tracking Integration Tests', () => {
+  jest.setTimeout(30000);
   let adminToken, customerToken, customerId;
   let testProduct;
   let paidOrder;
@@ -171,5 +173,179 @@ describe('Shiprocket Logistics & Tracking Integration Tests', () => {
     expect(unbooked).toBeDefined();
     expect(unbooked.status).toBe('PENDING_BOOKING');
     expect(unbooked.awbCode).toBeNull();
+  });
+
+  test('Shiprocket webhook DELIVERED updates shipment and order status, persisting deliveredAt', async () => {
+    const shipment = await Shipment.create({
+      orderId: paidOrder._id,
+      shiprocketOrderId: '1664945681',
+      awbCode: '14326361864278',
+      courierName: 'Xpressbees Surface 2kg',
+      status: 'IN_TRANSIT'
+    });
+
+    const webhookPayload = {
+      awb: '14326361864278',
+      courier_name: 'Xpressbees Surface 2kg',
+      current_status: 'Delivered',
+      current_status_id: 7,
+      delivered_date: '2026-10-25 13:15:00',
+      scans: [
+        {
+          date: '2026-10-25 13:15:00',
+          status: 'DLVD',
+          activity: 'Delivered',
+          location: 'Noida/PAL, Delhi NCR'
+        }
+      ]
+    };
+
+    const res = await request(app)
+      .post('/api/v1/webhooks/shiprocket')
+      .send(webhookPayload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.matched).toBe(true);
+
+    const updatedShipment = await Shipment.findById(shipment._id);
+    expect(updatedShipment.status).toBe('DELIVERED');
+    expect(updatedShipment.deliveredAt).toBeTruthy();
+    expect(updatedShipment.trackingHistory.length).toBeGreaterThan(0);
+
+    const updatedOrder = await Order.findById(paidOrder._id);
+    expect(updatedOrder.orderStatus).toBe('delivered');
+  });
+
+  test('Shipment delivery preserves COD order paymentStatus without mutating it to paid', async () => {
+    const codOrder = await Order.create({
+      orderNumber: 'TV-COD-TEST-003',
+      userId: customerId,
+      items: [{
+        productId: testProduct._id,
+        name: testProduct.name,
+        slug: testProduct.slug,
+        sku: testProduct.sku,
+        unitPrice: testProduct.sellingPrice,
+        quantity: 1,
+        total: testProduct.sellingPrice
+      }],
+      shippingAddress: {
+        fullName: 'COD Customer',
+        phone: '9876543210',
+        addressLine1: 'Lane 12',
+        city: 'Delhi',
+        state: 'Delhi',
+        postalCode: '110001'
+      },
+      subtotal: testProduct.sellingPrice,
+      finalAmount: testProduct.sellingPrice,
+      paymentMethod: 'cod',
+      paymentStatus: 'pending',
+      orderStatus: 'processing'
+    });
+
+    const shipment = await Shipment.create({
+      orderId: codOrder._id,
+      shiprocketOrderId: '1999999999',
+      awbCode: '999888777666',
+      status: 'OUT_FOR_DELIVERY'
+    });
+
+    const webhookPayload = {
+      awb: '999888777666',
+      current_status: 'Delivered',
+      current_status_id: 7,
+      delivered_date: '2026-10-25 14:00:00'
+    };
+
+    const res = await request(app)
+      .post('/api/v1/webhooks/shiprocket')
+      .send(webhookPayload);
+
+    expect(res.status).toBe(200);
+
+    const refreshedOrder = await Order.findById(codOrder._id);
+    expect(refreshedOrder.orderStatus).toBe('delivered');
+    // COD payment status should remain pending until cash collection reconciliation
+    expect(refreshedOrder.paymentStatus).toBe('pending');
+  });
+
+  test('Out-of-order scans cannot downgrade a DELIVERED status back to IN_TRANSIT', async () => {
+    const shipment = await Shipment.create({
+      orderId: paidOrder._id,
+      shiprocketOrderId: '1664945681',
+      awbCode: '14326361864278',
+      status: 'DELIVERED',
+      deliveredAt: new Date()
+    });
+
+    paidOrder.orderStatus = 'delivered';
+    await paidOrder.save();
+
+    // Out-of-order webhook delayed in flight
+    const stalePayload = {
+      awb: '14326361864278',
+      current_status: 'In Transit',
+      current_status_id: 6
+    };
+
+    const res = await request(app)
+      .post('/api/v1/webhooks/shiprocket')
+      .send(stalePayload);
+
+    expect(res.status).toBe(200);
+
+    const refreshedShipment = await Shipment.findById(shipment._id);
+    expect(refreshedShipment.status).toBe('DELIVERED');
+
+    const refreshedOrder = await Order.findById(paidOrder._id);
+    expect(refreshedOrder.orderStatus).toBe('delivered');
+  });
+
+  test('Webhook matching by orderNumber when AWB was not initially in database', async () => {
+    // Shipment created without AWB (as happens initially before courier allocation)
+    const shipment = await Shipment.create({
+      orderId: paidOrder._id,
+      shiprocketOrderId: '1664945681',
+      awbCode: null,
+      status: 'CREATED'
+    });
+
+    const webhookPayload = {
+      order_id: paidOrder.orderNumber, // Matches Toyvolt order number TV-SHIP-PAID-001
+      awb: '14326361864278',
+      courier_name: 'Xpressbees Surface 2kg',
+      current_status: 'Delivered',
+      current_status_id: 7
+    };
+
+    const res = await request(app)
+      .post('/api/v1/webhooks/shiprocket')
+      .send(webhookPayload);
+
+    expect(res.status).toBe(200);
+    expect(res.body.matched).toBe(true);
+
+    const updatedShipment = await Shipment.findById(shipment._id);
+    expect(updatedShipment.awbCode).toBe('14326361864278');
+    expect(updatedShipment.status).toBe('DELIVERED');
+  });
+
+  test('POST /api/v1/orders/:id/tracking/refresh triggers customer tracking refresh', async () => {
+    await Shipment.create({
+      orderId: paidOrder._id,
+      shiprocketOrderId: '1664945681',
+      awbCode: 'MOCK_AWB_123',
+      courierName: 'BlueDart Express',
+      status: 'IN_TRANSIT'
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/orders/${paidOrder._id}/tracking/refresh`)
+      .set('Authorization', `Bearer ${customerToken}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.data.shipment).toBeDefined();
   });
 });

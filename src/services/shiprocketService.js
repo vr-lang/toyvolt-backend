@@ -7,6 +7,7 @@ import { emailService } from './emailService.js';
 import { AppError } from '../utils/AppError.js';
 import { logger } from '../utils/logger.js';
 import { paiseToRupees } from '../utils/money.js';
+import { mapShiprocketStatus, canTransitionShipmentStatus } from '../utils/shipmentStatusMapper.js';
 
 const SHIPROCKET_BASE_URL = 'https://apiv2.shiprocket.in/v1/external';
 
@@ -269,9 +270,235 @@ class ShiprocketService {
   }
 
   /**
+   * Synchronize a shipment with verified Shiprocket tracking data.
+   * Updates shipment status, AWB, scans, deliveredAt, and updates parent order status.
+   * Strictly enforces status transition precedence and preserves payment status.
+   */
+  async syncShipment(shipmentOrId, options = {}) {
+    let shipment = typeof shipmentOrId === 'string' ? await Shipment.findById(shipmentOrId) : shipmentOrId;
+    if (!shipment) {
+      throw new AppError('Shipment not found.', 404);
+    }
+
+    const order = await Order.findById(shipment.orderId);
+    if (!order) {
+      throw new AppError('Order associated with shipment not found.', 404);
+    }
+
+    // Fast return if already delivered and not forced
+    if (shipment.status === 'DELIVERED' && order.orderStatus === 'delivered' && !options.force) {
+      return { shipment, order, updated: false };
+    }
+
+    let awbCode = shipment.awbCode || null;
+    let courierName = shipment.courierName || null;
+    let rawStatus = null;
+    let rawStatusCode = null;
+    let deliveredDate = null;
+    let scans = [];
+    let liveTracking = null;
+
+    // A. Check if webhook payload is provided directly
+    if (options.webhookPayload) {
+      const p = options.webhookPayload;
+      rawStatus = p.current_status || p.status || null;
+      rawStatusCode = p.current_status_id || p.status_code || null;
+      awbCode = p.awb || p.awb_code || awbCode;
+      courierName = p.courier_name || courierName;
+      deliveredDate = p.delivered_date || null;
+      scans = p.scans || p.activities || [];
+    }
+
+    // B. Live Shiprocket API Lookup (if configured and live)
+    const isLive = hasShiprocket() && env.NODE_ENV !== 'test';
+    if (isLive && (!options.webhookPayload || !awbCode)) {
+      // Step 1: If AWB code is missing, query Shiprocket Order endpoint
+      if (!awbCode && shipment.shiprocketOrderId) {
+        try {
+          const orderResponse = await this.request('GET', `/orders/show/${shipment.shiprocketOrderId}`);
+          const shipData = Array.isArray(orderResponse?.data?.shipments)
+            ? orderResponse.data.shipments[0]
+            : orderResponse?.data?.shipments;
+
+          if (shipData?.awb) {
+            awbCode = shipData.awb;
+            courierName = shipData.courier || courierName;
+          }
+          if (orderResponse?.data?.status) {
+            rawStatus = orderResponse.data.status;
+            rawStatusCode = orderResponse.data.status_code;
+          }
+          if (shipData?.delivered_date) {
+            deliveredDate = shipData.delivered_date;
+          }
+        } catch (srOrderErr) {
+          logger.warn(`Could not fetch Shiprocket order details for #${shipment.shiprocketOrderId}: ${srOrderErr.message}`);
+        }
+      }
+
+      // Step 2: Fetch detailed tracking from courier AWB endpoint
+      if (awbCode) {
+        try {
+          liveTracking = await this.getTracking(awbCode);
+          const trackData = liveTracking?.tracking_data;
+          const trackItem = trackData?.shipment_track?.[0];
+
+          if (trackItem) {
+            rawStatus = trackItem.current_status || rawStatus;
+            rawStatusCode = trackItem.current_status_id || trackData?.shipment_status || rawStatusCode;
+            courierName = trackItem.courier_name || courierName;
+            if (trackItem.delivered_date) {
+              deliveredDate = trackItem.delivered_date;
+            }
+          }
+
+          scans = trackData?.shipment_track_activities || trackItem?.scans || scans;
+        } catch (srTrackErr) {
+          logger.warn(`Could not fetch live tracking for AWB ${awbCode}: ${srTrackErr.message}`);
+        }
+      }
+    } else if (env.NODE_ENV === 'test' && !hasShiprocket() && !options.webhookPayload) {
+      // Mock tracking behavior for test runner
+      if (!awbCode) {
+        awbCode = 'MOCK_AWB_14326361864278';
+        courierName = 'Xpressbees Surface 2kg';
+      }
+      liveTracking = this.getMockResponse('/courier/track/awb');
+      const trackData = liveTracking?.tracking_data;
+      const trackItem = trackData?.shipment_track?.[0];
+      rawStatus = options.mockStatus || trackItem?.current_status || 'IN_TRANSIT';
+      rawStatusCode = options.mockStatusCode || trackData?.shipment_status || 6;
+      deliveredDate = options.mockDeliveredDate || null;
+      scans = trackItem?.scans || [];
+    }
+
+    // Step 3: Canonical Status Normalization & Transition Validation
+    const { shipmentStatus: mappedShipmentStatus, orderStatus: mappedOrderStatus } = mapShiprocketStatus(
+      rawStatus,
+      rawStatusCode
+    );
+
+    const allowTransition = canTransitionShipmentStatus(shipment.status, mappedShipmentStatus);
+
+    // Step 4: Persist updates to Shipment
+    if (awbCode && (!shipment.awbCode || shipment.awbCode !== awbCode)) {
+      shipment.awbCode = awbCode;
+      shipment.trackingUrl = `https://shiprocket.co/tracking/${awbCode}`;
+    }
+    if (courierName) {
+      shipment.courierName = courierName;
+    }
+
+    if (allowTransition && mappedShipmentStatus) {
+      shipment.status = mappedShipmentStatus;
+    }
+
+    if (mappedShipmentStatus === 'DELIVERED') {
+      shipment.deliveredAt = deliveredDate ? new Date(deliveredDate) : (shipment.deliveredAt || new Date());
+    }
+
+    if (Array.isArray(scans) && scans.length > 0) {
+      shipment.trackingHistory = scans.map(s => ({
+        status: s['sr-status-label'] || s.status || shipment.status,
+        activity: s.activity || s.current_status || 'Tracking scan',
+        date: s.date ? new Date(s.date) : new Date(),
+        location: s.location || ''
+      }));
+    }
+
+    shipment.lastSyncedAt = new Date();
+
+    if (options.webhookPayload) {
+      shipment.rawWebhooks.push({
+        event: shipment.status,
+        receivedAt: new Date(),
+        payload: options.webhookPayload
+      });
+    }
+
+    await shipment.save();
+
+    // Step 5: Update parent Order status safely (without modifying paymentStatus)
+    if (allowTransition && mappedOrderStatus) {
+      if (mappedOrderStatus === 'delivered') {
+        order.orderStatus = 'delivered';
+      } else if (mappedOrderStatus === 'shipped') {
+        if (order.orderStatus === 'placed' || order.orderStatus === 'processing' || order.orderStatus === 'confirmed') {
+          order.orderStatus = 'shipped';
+        }
+      } else if (mappedOrderStatus === 'cancelled') {
+        order.orderStatus = 'cancelled';
+      }
+      await order.save();
+    }
+
+    return {
+      shipment,
+      order,
+      liveTracking,
+      updated: true
+    };
+  }
+
+  /**
+   * Batch reconciles active, non-terminal shipments with Shiprocket
+   */
+  async reconcileShipments(filter = {}) {
+    const query = {
+      status: { $nin: ['DELIVERED', 'CANCELLED', 'RTO_DELIVERED'] },
+      ...filter
+    };
+
+    const activeShipments = await Shipment.find(query).limit(50);
+    let syncedCount = 0;
+    const errors = [];
+
+    for (const shipment of activeShipments) {
+      try {
+        await this.syncShipment(shipment);
+        syncedCount++;
+      } catch (err) {
+        errors.push({ shipmentId: shipment._id, error: err.message });
+        logger.warn(`Failed to reconcile shipment ${shipment._id}: ${err.message}`);
+      }
+    }
+
+    return {
+      totalFound: activeShipments.length,
+      syncedCount,
+      errors
+    };
+  }
+
+  /**
+   * Override mock tracking response for testing
+   */
+  setMockTrackingOverride(override) {
+    this.mockTrackingOverride = override;
+  }
+
+  /**
    * Mock responses for unit/integration tests and development sandbox
    */
   getMockResponse(endpoint, data) {
+    if (this.mockTrackingOverride && endpoint.includes('/courier/track/awb')) {
+      return this.mockTrackingOverride;
+    }
+    if (endpoint.includes('/orders/show')) {
+      return {
+        data: {
+          id: 1664945681,
+          status: 'DELIVERED',
+          status_code: 7,
+          shipments: [{
+            awb: '14326361864278',
+            courier: 'Xpressbees Surface 2kg',
+            status: 'DELIVERED',
+            delivered_date: new Date().toISOString()
+          }]
+        }
+      };
+    }
     if (endpoint.includes('/orders/create/adhoc')) {
       return {
         order_id: `SR_MOCK_${Date.now()}`,

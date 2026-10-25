@@ -12,6 +12,8 @@ beforeAll(async () => {
 
   mongoServer = await MongoMemoryServer.create({
     binary: {
+      systemBinary: process.env.MONGOMS_SYSTEM_BINARY || '/Users/yuvrajsingh/.cache/mongodb-binaries/mongod-arm64-darwin-7.0.24',
+      skipDownload: true,
       version: '7.0.24'
     }
   });

@@ -89,6 +89,10 @@ const shipmentSchema = new mongoose.Schema({
     type: Date,
     default: null
   },
+  deliveredAt: {
+    type: Date,
+    default: null
+  },
   ndrReason: {
     type: String,
     default: null

@@ -1,8 +1,9 @@
 import app from './app.js';
-import { env } from './config/env.js';
+import { env, hasShiprocket } from './config/env.js';
 import { connectDB, disconnectDB } from './config/database.js';
 
 let server;
+let backgroundSyncInterval = null;
 
 const startServer = async () => {
   try {
@@ -19,6 +20,19 @@ const startServer = async () => {
 🏥 Health:      http://localhost:${env.PORT}/api/v1/health
 ====================================================
       `);
+
+      // Start periodic background shipment reconciliation (every 15 minutes)
+      if (hasShiprocket()) {
+        const SYNC_INTERVAL_MS = 15 * 60 * 1000;
+        backgroundSyncInterval = setInterval(async () => {
+          try {
+            const { shiprocketService } = await import('./services/shiprocketService.js');
+            await shiprocketService.reconcileShipments();
+          } catch (syncErr) {
+            console.error('[Shiprocket Background Sync] Error:', syncErr.message);
+          }
+        }, SYNC_INTERVAL_MS);
+      }
     });
 
     server.on('error', (err) => {
@@ -41,6 +55,9 @@ const startServer = async () => {
 // Graceful shutdown handlers
 const handleShutdown = async (signal) => {
   console.log(`\n🛑 Received ${signal}. Gracefully shutting down...`);
+  if (backgroundSyncInterval) {
+    clearInterval(backgroundSyncInterval);
+  }
   if (server) {
     server.close(async () => {
       console.log('🔒 Closed active HTTP connections.');

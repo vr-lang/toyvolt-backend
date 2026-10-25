@@ -814,42 +814,16 @@ export const getAdminShipmentById = asyncHandler(async (req, res) => {
 });
 
 export const syncShipmentTelemetry = asyncHandler(async (req, res) => {
-  const activeShipments = await Shipment.find({
-    status: { $in: ['AWB_ASSIGNED', 'PICKUP_SCHEDULED', 'PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'NDR'] },
-    awbCode: { $ne: null }
-  }).limit(25);
-
-  let syncedCount = 0;
-  const now = new Date();
-
-  for (const shipment of activeShipments) {
-    try {
-      if (hasShiprocket()) {
-        const tracking = await shiprocketService.getTracking(shipment.awbCode);
-        const scans = tracking?.tracking_data?.shipment_track?.[0]?.scans || [];
-        if (scans.length > 0) {
-          shipment.trackingHistory = scans.map(s => ({
-            status: s.activity || 'IN_TRANSIT',
-            activity: s.activity || 'Movement scan',
-            date: new Date(s.date || now),
-            location: s.location || ''
-          }));
-        }
-      }
-      shipment.lastSyncedAt = now;
-      await shipment.save();
-      syncedCount++;
-    } catch (err) {
-      logger.warn(`Could not sync telemetry for AWB ${shipment.awbCode}: ${err.message}`);
-    }
-  }
+  const result = await shiprocketService.reconcileShipments();
 
   res.status(200).json({
     success: true,
-    message: `Telemetry synced for ${syncedCount} active shipments.`,
+    message: `Telemetry synced for ${result.syncedCount} active shipments (out of ${result.totalFound} found).`,
     data: {
-      syncedCount,
-      lastSyncedAt: now.toISOString()
+      syncedCount: result.syncedCount,
+      totalFound: result.totalFound,
+      errors: result.errors,
+      lastSyncedAt: new Date().toISOString()
     }
   });
 });

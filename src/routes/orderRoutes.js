@@ -5,7 +5,7 @@ import {
   getOrderById,
   cancelOrder
 } from '../controllers/orderController.js';
-import { getOrderTracking } from '../controllers/shipmentController.js';
+import { getOrderTracking, refreshCustomerOrderTracking } from '../controllers/shipmentController.js';
 import { protect } from '../middleware/authMiddleware.js';
 import { validate } from '../middleware/validate.js';
 import {
@@ -20,6 +20,7 @@ router.use(protect);
 router.post('/', validate(createOrderSchema), createOrder);
 router.get('/my', getMyOrders);
 router.get('/:id/tracking', getOrderTracking);
+router.post('/:id/tracking/refresh', refreshCustomerOrderTracking);
 router.get('/:id', getOrderById);
 router.post('/:id/cancel', validate(cancelOrderSchema), cancelOrder);
 
